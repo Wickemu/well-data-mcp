@@ -85,3 +85,7 @@ Known follow-ups:
   license/attribution notice). Re-run `scripts/convert-gem.py` on future
   downloads. Belize has zero GEM O&G coverage (Spanish Lookout too small) —
   still no machine-readable source for Belize.
+
+## Source
+
+https://github.com/Wickemu/well-data-mcp — MIT licensed; bundled Global Energy Monitor data is CC BY 4.0 (see `data/ATTRIBUTION.md`).

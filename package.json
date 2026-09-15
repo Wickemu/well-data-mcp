@@ -26,7 +26,8 @@
   "files": [
     "src",
     "data",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "start": "node src/index.js",
@@ -36,5 +37,15 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.0"
+  },
+  "license": "MIT",
+  "author": "Jack Armstrong (https://github.com/Wickemu)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wickemu/well-data-mcp.git"
+  },
+  "homepage": "https://github.com/Wickemu/well-data-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Wickemu/well-data-mcp/issues"
   }
 }
