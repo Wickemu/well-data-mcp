@@ -6,7 +6,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { queryLayer, countLayer, likeClause, eqClause, sqlQuote, nearParams } from "./arcgis.js";
+import { queryLayer, countLayer, likeClause, eqClause, apiMatchClauses, sqlQuote, nearParams } from "./arcgis.js";
 import { SOURCES, findSources, normalizeRecord, INTERNATIONAL_NOTES } from "./states.js";
 import { queryBssBoreholes } from "./wfs.js";
 import { searchGem, gemDatasets } from "./gem.js";
@@ -229,7 +229,7 @@ server.registerTool(
   {
     title: "Get well by API number",
     description:
-      "Look up a specific well by API number and return its FULL raw record from the state source plus the normalized summary. Handles formatting differences (dashes, state prefixes): tries exact match first, then a contains-match on the digits. If state is omitted, tries every state.",
+      "Look up a specific well by API number and return its FULL raw record from the state source plus the normalized summary. Handles formatting differences (dashes, state prefixes): tries an exact match first, then the bare digits, then a dash-tolerant contains-match on the county + sequence digits — so undashed input still finds wells in sources that store dashed APIs (NM, ND, CO, NV). If state is omitted, tries every state.",
     inputSchema: {
       api: z.string().describe("API well number in any common format (e.g. 04-029-12345, 0402912345, 33-053-04652, 4300712345)."),
       state: z.enum(STATE_KEYS).optional().describe("Two-letter state code if known (much faster)."),
@@ -243,13 +243,8 @@ server.registerTool(
       if (s.kind === "wfs-bss") return null; // BSS ids are not API numbers; use search_wells well_name instead
       const field = s.searchFields.api;
       if (!field) throw new Error("source has no API field");
-      // exact as given, exact digits, then contains on the trailing 8 digits
-      const attempts = [
-        eqClause(field, api),
-        eqClause(field, digits),
-        likeClause(field, digits.slice(-8)),
-      ];
-      for (const where of attempts) {
+      // exact as given, exact digits, then dash-tolerant contains on county+sequence
+      for (const where of apiMatchClauses(field, api)) {
         const { features } = await querySourceLayer(s, { where, limit: 5 });
         if (features.length) {
           return {

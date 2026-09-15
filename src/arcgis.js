@@ -33,6 +33,24 @@ export function eqClause(field, value) {
 }
 
 /**
+ * WHERE clauses get_well tries in order for an API number in any common format:
+ *   1. exact as given
+ *   2. exact on the digits only (CA/UT/TX/NZ store undashed strings)
+ *   3. dash-tolerant contains on county + sequence: the trailing 8 digits with a
+ *      wildcard between the 3-digit county and 5-digit sequence, e.g. '%025%36283%',
+ *      so it also matches sources that STORE dashes — NM '30-025-36283',
+ *      ND '33-015-00001-00-00', CO '009-05201', NV '27-001-90335'.
+ */
+export function apiMatchClauses(field, api) {
+  const digits = String(api).replace(/\D/g, "");
+  return [
+    eqClause(field, api),
+    eqClause(field, digits),
+    likeClause(field, `${digits.slice(-8, -5)}%${digits.slice(-5)}`),
+  ];
+}
+
+/**
  * Query a layer with pagination. Returns { features, exceededLimit }.
  * Each feature: { attributes, geometry } with geometry in WGS84 (lon/lat).
  */
