@@ -12,7 +12,7 @@ states' own map viewers use.
 | `CA-GEO` | California geothermal wells | CalGEM (WellSTAR) | Separate layer, incl. completion/abandon dates |
 | `UT` | Utah oil & gas wells | Utah DOGM via SITLA GIS | Rich: incl. cumulative oil/gas/water production. **O&G only** — Utah geothermal is DWRi-regulated with no registry; use `search_geothermal_datasets` for Cape Station |
 | `NM` | New Mexico oil & gas wells | NM OCD (EMNRD) | Rich: depths, spud/plug/last-production dates |
-| `CO` | Colorado wells | ECMC via CO DNR GIS | Current but thin: API, name, operator, status, basin, lat/lon |
+| `CO` | Colorado wells | ECMC via CO DNR GIS | API, name, operator, status, county, field, well class, spud/status dates, MD/TVD, basin, lat/lon (re-verified 2026-09-15 after the ECMC cutover) |
 | `ND` | North Dakota oil & gas wells | ND DMR O&G Division | Updated hourly; incl. TD, NDIC file no |
 | `TX` | Texas well locations | Texas RRC public GIS | **Location + API only** — RRC's GIS has no operator/status; that detail lives in their non-GIS systems |
 | `NV-GEO` | Nevada geothermal wells | NBMG (UNR) / NGDS | Academic mirror; thermal class, permit no; lags recent drilling |

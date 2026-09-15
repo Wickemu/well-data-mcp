@@ -47,3 +47,29 @@ test("CA-OG normalizer emits ISO spudDate", async () => {
   const n = normalizeRecord(ca, { API: "0402120521", LeaseName: "X", WellNumber: "1", SpudDate: "02/17/1988" }, null);
   assert.equal(n.spudDate, "1988-02-17");
 });
+
+test("CO normalizer maps county/field/class/dates/depths from the live ECMC schema", async () => {
+  const { SOURCES, normalizeRecord } = await import("../src/states.js");
+  const co = SOURCES.find((s) => s.key === "CO");
+  assert.deepEqual(
+    ["api", "well_name", "operator", "county", "field", "status", "well_type"].map((k) => co.searchFields[k]),
+    ["API", "WellName", "Operator", "COUNTY", "field_name", "wellstat", "well_class"]
+  );
+  // attributes exactly as the live layer returned them on 2026-09-15 (note padded well_class)
+  const n = normalizeRecord(
+    co,
+    { API: "001-05000", WellName: "UPRR-JOLLY 1", Operator: "TOMBERLIN* BILL", wellstat: "PA", BASIN: "Denver (DJ) Basin",
+      COUNTY: "ADAMS", field_name: "WILDCAT", spud_date: -385430400000, max_m_depth: 5404, max_tv_depth: 0,
+      well_class: "DA                       ", status_date: -384825600000 },
+    { x: -104.6, y: 39.9 }
+  );
+  assert.equal(n.county, "ADAMS");
+  assert.equal(n.field, "WILDCAT");
+  assert.equal(n.wellType, "DA");
+  assert.equal(n.spudDate, "1957-10-15");
+  assert.equal(n.statusDate, "1957-10-22");
+  assert.equal(n.depthMD, 5404);
+  assert.equal(n.depthTVD, null); // 0 means not recorded
+  assert.equal(n.basin, "Denver (DJ) Basin");
+  assert.equal(n.latitude, 39.9);
+});
