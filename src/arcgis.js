@@ -1,6 +1,8 @@
 // Generic ArcGIS REST layer query client (MapServer + FeatureServer layers).
 // All state regulator endpoints speak the same query grammar; this is the one wrapper.
 
+import { USER_AGENT } from "./meta.js";
+
 const TIMEOUT_MS = 30_000;
 
 async function fetchJson(url, params) {
@@ -8,7 +10,7 @@ async function fetchJson(url, params) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}?${qs}`, { signal: ctrl.signal });
+    const res = await fetch(`${url}?${qs}`, { signal: ctrl.signal, headers: { "User-Agent": USER_AGENT } });
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
     const data = await res.json();
     if (data.error) throw new Error(`ArcGIS error ${data.error.code}: ${data.error.message} (${url})`);
@@ -30,6 +32,24 @@ export function likeClause(field, value) {
 
 export function eqClause(field, value) {
   return `UPPER(${field}) = UPPER(${sqlQuote(value)})`;
+}
+
+/**
+ * WHERE clauses get_well tries in order for an API number in any common format:
+ *   1. exact as given
+ *   2. exact on the digits only (CA/UT/TX/NZ store undashed strings)
+ *   3. dash-tolerant contains on county + sequence: the trailing 8 digits with a
+ *      wildcard between the 3-digit county and 5-digit sequence, e.g. '%025%36283%',
+ *      so it also matches sources that STORE dashes — NM '30-025-36283',
+ *      ND '33-015-00001-00-00', CO '009-05201', NV '27-001-90335'.
+ */
+export function apiMatchClauses(field, api) {
+  const digits = String(api).replace(/\D/g, "");
+  return [
+    eqClause(field, api),
+    eqClause(field, digits),
+    likeClause(field, `${digits.slice(-8, -5)}%${digits.slice(-5)}`),
+  ];
 }
 
 /**

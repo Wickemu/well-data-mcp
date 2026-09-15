@@ -1,5 +1,7 @@
 // Minimal OGC WFS (GeoJSON) client — used for BRGM's Banque du Sous-Sol.
 
+import { USER_AGENT } from "./meta.js";
+
 const TIMEOUT_MS = 40_000;
 
 /**
@@ -22,7 +24,7 @@ export async function queryBssBoreholes({ bbox, count = 100 }) {
   try {
     const res = await fetch(`https://geoservices.brgm.fr/geologie?${qs}`, {
       signal: ctrl.signal,
-      headers: { "User-Agent": "well-data-mcp/0.1" },
+      headers: { "User-Agent": USER_AGENT },
     });
     if (!res.ok) throw new Error(`BRGM WFS HTTP ${res.status}`);
     const data = await res.json();

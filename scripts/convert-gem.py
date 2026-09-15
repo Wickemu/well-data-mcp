@@ -7,16 +7,47 @@ Looks for (name patterns, any release month):
   Global-Oil-and-Gas-Extraction-Tracker-*.xlsx -> data/gem-oilgas-fields.json
 
 Re-run whenever a new GEM release is downloaded (globalenergymonitor.org/download-data).
+Each bundle's JSON header carries license/attribution/url/release fields
+alongside "source" and "records" - see data/ATTRIBUTION.md for the full notice.
 """
 
 import glob
 import json
 import os
+import re
 import sys
 
 import openpyxl
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+# GEM publishes all of its trackers under one license; see data/ATTRIBUTION.md.
+GEM_LICENSE = "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)"
+GEM_ATTRIBUTION = "Global Energy Monitor"
+GEM_URL = "https://globalenergymonitor.org/download-data/"
+
+_RELEASE_RE = re.compile(
+    r"(January|February|March|April|May|June|July|August|September|October|November|December)-(\d{4})"
+)
+
+
+def release_label(filename):
+    """Pull 'Month YYYY' out of a GEM tracker filename, e.g.
+    'Geothermal-Power-Tracker-March-2026-Final.xlsx' -> 'March 2026'.
+    Returns None (rather than raising) if a future filename doesn't match -
+    a missing release label shouldn't block the conversion."""
+    m = _RELEASE_RE.search(filename)
+    return f"{m.group(1)} {m.group(2)}" if m else None
+
+
+def bundle_header(filename):
+    return {
+        "source": filename,
+        "release": release_label(filename),
+        "license": GEM_LICENSE,
+        "attribution": GEM_ATTRIBUTION,
+        "url": GEM_URL,
+    }
 
 
 def rows_of(path, sheet):
@@ -116,7 +147,7 @@ def main():
         data = convert_geothermal(geo[0])
         release["geothermal"] = os.path.basename(geo[0])
         with open(os.path.join(OUT_DIR, "gem-geothermal.json"), "w", encoding="utf-8") as f:
-            json.dump({"source": os.path.basename(geo[0]), "records": data}, f, ensure_ascii=False)
+            json.dump({**bundle_header(os.path.basename(geo[0])), "records": data}, f, ensure_ascii=False)
         print(f"gem-geothermal.json: {len(data)} units from {os.path.basename(geo[0])}")
 
     og = glob.glob(os.path.join(src, "Global-Oil-and-Gas-Extraction-Tracker-*.xlsx"))
@@ -124,7 +155,7 @@ def main():
         data = convert_goget(og[0])
         release["oilgas"] = os.path.basename(og[0])
         with open(os.path.join(OUT_DIR, "gem-oilgas-fields.json"), "w", encoding="utf-8") as f:
-            json.dump({"source": os.path.basename(og[0]), "records": data}, f, ensure_ascii=False)
+            json.dump({**bundle_header(os.path.basename(og[0])), "records": data}, f, ensure_ascii=False)
         print(f"gem-oilgas-fields.json: {len(data)} fields from {os.path.basename(og[0])}")
 
     if not release:

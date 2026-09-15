@@ -12,7 +12,7 @@ states' own map viewers use.
 | `CA-GEO` | California geothermal wells | CalGEM (WellSTAR) | Separate layer, incl. completion/abandon dates |
 | `UT` | Utah oil & gas wells | Utah DOGM via SITLA GIS | Rich: incl. cumulative oil/gas/water production. **O&G only** — Utah geothermal is DWRi-regulated with no registry; use `search_geothermal_datasets` for Cape Station |
 | `NM` | New Mexico oil & gas wells | NM OCD (EMNRD) | Rich: depths, spud/plug/last-production dates |
-| `CO` | Colorado wells | ECMC via CO DNR GIS | Current but thin: API, name, operator, status, basin, lat/lon |
+| `CO` | Colorado wells | ECMC via CO DNR GIS | API, name, operator, status, county, field, well class, spud/status dates, MD/TVD, basin, lat/lon (re-verified 2026-09-15 after the ECMC cutover) |
 | `ND` | North Dakota oil & gas wells | ND DMR O&G Division | Updated hourly; incl. TD, NDIC file no |
 | `TX` | Texas well locations | Texas RRC public GIS | **Location + API only** — RRC's GIS has no operator/status; that detail lives in their non-GIS systems |
 | `NV-GEO` | Nevada geothermal wells | NBMG (UNR) / NGDS | Academic mirror; thermal class, permit no; lags recent drilling |
@@ -28,15 +28,27 @@ states' own map viewers use.
 - **`list_operators`** — discover the exact operator strings a state uses before searching
 - **`raw_query`** — raw SQL-92 `where` against any source layer (dates, depths, cum production…)
 - **`search_geothermal_datasets`** — DOE geothermal project datasets via the keyless OSTI Data Explorer API (indexes the GDR): well logs, stimulation, flow tests, microseismic. This is the Fervo Cape Station channel (search `cape egs` or `fervo`) and Utah FORGE.
-- **`search_gem_projects`** — bundled Global Energy Monitor data (local, offline): 835 geothermal power units worldwide + 7,673 upstream O&G fields. Covers Kenya (Olkaria: 24 units), NZ, Guadeloupe (Bouillante), Guatemala, Namibia (Orange Basin: Graff, Mopane, Venus...), and Fervo's whole pipeline (Cape Station phases, Corsac, Project Red). Filter by country/name/operator/status or lat/lon radius. Refresh: download a new release from globalenergymonitor.org/download-data, then `python scripts/convert-gem.py <dir>`. CC BY 4.0 — cite GEM.
+- **`search_gem_projects`** — bundled Global Energy Monitor data (local, offline): 835 geothermal power units worldwide + 7,673 upstream O&G fields. Covers Kenya (Olkaria: 24 units), NZ, Guadeloupe (Bouillante), Guatemala, Namibia (Orange Basin: Graff, Mopane, Venus...), and Fervo's whole pipeline (Cape Station phases, Corsac, Project Red). Filter by country/name/operator/status or lat/lon radius. Refresh: download a new release from globalenergymonitor.org/download-data, `pip install -r scripts/requirements.txt` (just `openpyxl`), then `python scripts/convert-gem.py <dir>`. CC BY 4.0 — see `data/ATTRIBUTION.md`.
 
 ## Run / register
+
+Requires **Node 18+** (native `fetch`, top-level `await`); developed and run on Node 22.
 
 ```
 npm install
 npm run smoke          # live test, one query per source
 claude mcp add --scope user well-data -- node <abs-path>/src/index.js
 ```
+
+`claude mcp add` bakes that absolute `<abs-path>` into `~/.claude.json` at
+registration time — moving or renaming this project folder breaks the
+registration until you re-run `claude mcp add` (or hand-edit the path in
+`~/.claude.json`).
+
+If this package is ever published to npm, `npx -y well-data-mcp` will work
+in place of the absolute-path `node` invocation above — `package.json`'s
+`bin`/`engines` fields are already set up for it. It isn't published today
+(no registry, no git remote), so use the absolute-path form above.
 
 ## Adding a state
 
@@ -62,11 +74,14 @@ grammar is identical everywhere.
   coverage exists in Global Energy Monitor's trackers (form-gated download).
 
 Known follow-ups:
-- **Colorado**: ECMC retires its legacy map Sept 4, 2026 and is moving to a new
-  ESRI stack; the `gisdnr.state.co.us` ECMC_Public services are the DNR-hosted ones
-  — re-verify after the cutover.
+- **Colorado**: resolved. ECMC's legacy map retired Sept 4, 2026 as planned;
+  the `gisdnr.state.co.us` ECMC_Public services (DNR-hosted) are the live
+  replacement, and the field map was re-verified against them 2026-09-15,
+  post-cutover (see the Coverage table above).
 - **Wyoming / Oklahoma / Kansas**: not yet mapped; same pattern should apply.
 - **FracFocus**: bulk CSV + API for completion chemistry, could join on API-14.
-- **GEM trackers**: bundled (March-Aug 2026 releases) in `data/`; re-run
-  `scripts/convert-gem.py` on future downloads. Belize has zero GEM O&G coverage
-  (Spanish Lookout too small) — still no machine-readable source for Belize.
+- **GEM trackers**: bundled in `data/` — both the geothermal and oil & gas
+  extracts are the March 2026 release (see `data/ATTRIBUTION.md` for the full
+  license/attribution notice). Re-run `scripts/convert-gem.py` on future
+  downloads. Belize has zero GEM O&G coverage (Spanish Lookout too small) —
+  still no machine-readable source for Belize.

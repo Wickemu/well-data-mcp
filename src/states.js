@@ -2,7 +2,11 @@
 // Every endpoint and field name below was verified live on 2026-08-28.
 // Adding a state = adding an entry here.
 
-function msToIso(v) {
+// Date contract: every normalized *Date field is an ISO 'YYYY-MM-DD' string or null.
+// ArcGIS date fields arrive as epoch milliseconds (msToIso); CalGEM's WellSTAR
+// layers carry US-formatted strings 'MM/DD/YYYY' instead (usDateToIso).
+
+export function msToIso(v) {
   if (v == null || v === "") return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return String(v);
@@ -11,6 +15,16 @@ function msToIso(v) {
   } catch {
     return null;
   }
+}
+
+/** 'MM/DD/YYYY' (optionally followed by a time) -> 'YYYY-MM-DD'; null-safe; other shapes pass through. */
+export function usDateToIso(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return msToIso(v);
+  const m = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(v));
+  if (!m) return String(v).trim();
+  const [, mm, dd, yyyy] = m;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
 function coord(attrs, key, geometry, axis) {
@@ -46,7 +60,7 @@ export const SOURCES = [
       county: a.CountyName,
       latitude: coord(a, "Latitude", g, "y"),
       longitude: coord(a, "Longitude", g, "x"),
-      spudDate: a.SpudDate || null,
+      spudDate: usDateToIso(a.SpudDate),
       district: a.District,
       confidential: a.isConfidential,
     }),
@@ -77,9 +91,11 @@ export const SOURCES = [
       county: a.CountyName,
       latitude: coord(a, "Lat83", g, "y"),
       longitude: coord(a, "Long83", g, "x"),
-      spudDate: a.SpudDate || null,
-      completionDate: a.CompDate || null,
-      abandonDate: a.ABDdate || null,
+      // live layer types these as Integer and they are null on every row checked 2026-09-15;
+      // usDateToIso handles either a US string or an epoch number if CalGEM starts filling them
+      spudDate: usDateToIso(a.SpudDate),
+      completionDate: usDateToIso(a.CompDate),
+      abandonDate: usDateToIso(a.ABDdate),
       directional: a.Directional,
     }),
   },
@@ -159,25 +175,33 @@ export const SOURCES = [
     state: "CO",
     label: "Colorado wells (API spots)",
     agency: "Colorado ECMC (via DNR GIS)",
+    // Field names re-verified against …/MapServer/0?f=json on 2026-09-15 (post ECMC cutover).
     url: "https://gisdnr.state.co.us/arcgis/rest/services/ECMC_Public/ECMC_Wells/MapServer/0",
     pageMax: 2000,
     searchFields: {
       api: "API",
       well_name: "WellName",
       operator: "Operator",
+      county: "COUNTY",
+      field: "field_name",
       status: "wellstat",
+      well_type: "well_class",
     },
     normalize: (a, g) => ({
       api: a.API,
-      wellName: a.WellName ?? a.NAME,
+      wellName: a.WellName ?? a.well_name,
       operator: a.Operator,
       status: a.wellstat,
-      wellType: null,
-      field: a.BASIN ?? null,
-      county: null,
+      wellType: a.well_class || null,
+      field: a.field_name || a.BASIN || null,
+      county: a.COUNTY ?? null,
       latitude: coord(a, "lat", g, "y"),
       longitude: coord(a, "long", g, "x"),
-      spudDate: null,
+      spudDate: msToIso(a.spud_date),
+      statusDate: msToIso(a.status_date),
+      depthMD: a.max_m_depth || null,
+      depthTVD: a.max_tv_depth || null,
+      basin: a.BASIN ?? null,
     }),
   },
   {
