@@ -27,3 +27,23 @@ test("apiMatchClauses: short inputs degrade to a plain contains on the digits", 
   assert.equal(apiMatchClauses("f", "12345")[2], likeClause("f", "%12345"));
   assert.equal(apiMatchClauses("f", "5201")[2], likeClause("f", "%5201"));
 });
+
+test("usDateToIso: CalGEM 'MM/DD/YYYY' strings -> ISO, null-safe, pass-through otherwise", async () => {
+  const { usDateToIso, msToIso } = await import("../src/states.js");
+  assert.equal(usDateToIso("02/17/1988"), "1988-02-17");
+  assert.equal(usDateToIso("5/3/2001"), "2001-05-03");
+  assert.equal(usDateToIso("12/07/1999 00:00:00"), "1999-12-07");
+  assert.equal(usDateToIso(null), null);
+  assert.equal(usDateToIso(""), null);
+  assert.equal(usDateToIso("2001-05-03"), "2001-05-03");
+  assert.equal(usDateToIso(Date.UTC(2001, 4, 3)), "2001-05-03"); // epoch ms, same as msToIso
+  assert.equal(msToIso(-703382400000), "1947-09-18"); // CO spud_date sample
+  assert.equal(msToIso(null), null);
+});
+
+test("CA-OG normalizer emits ISO spudDate", async () => {
+  const { SOURCES, normalizeRecord } = await import("../src/states.js");
+  const ca = SOURCES.find((s) => s.key === "CA-OG");
+  const n = normalizeRecord(ca, { API: "0402120521", LeaseName: "X", WellNumber: "1", SpudDate: "02/17/1988" }, null);
+  assert.equal(n.spudDate, "1988-02-17");
+});

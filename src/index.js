@@ -205,7 +205,7 @@ server.registerTool(
   {
     title: "Search wells",
     description:
-      "Search state regulator well databases by operator, well/lease name, county, field, status, or type. Returns normalized records (API number, name, operator, status, type, field, county, lat/lon, dates, depths where available) plus source-specific extras. Filters combine with AND. Set count_only=true to size a query before pulling records.",
+      "Search state regulator well databases by operator, well/lease name, county, field, status, or type. Returns normalized records (API number, name, operator, status, type, field, county, lat/lon, dates, depths where available) plus source-specific extras. All *Date fields are normalized to ISO 'YYYY-MM-DD' strings (or null) regardless of how the source stores them, so they sort and compare across states. Filters combine with AND. Set count_only=true to size a query before pulling records.",
     inputSchema: searchShape,
   },
   async (args) => {

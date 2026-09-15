@@ -2,7 +2,11 @@
 // Every endpoint and field name below was verified live on 2026-08-28.
 // Adding a state = adding an entry here.
 
-function msToIso(v) {
+// Date contract: every normalized *Date field is an ISO 'YYYY-MM-DD' string or null.
+// ArcGIS date fields arrive as epoch milliseconds (msToIso); CalGEM's WellSTAR
+// layers carry US-formatted strings 'MM/DD/YYYY' instead (usDateToIso).
+
+export function msToIso(v) {
   if (v == null || v === "") return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return String(v);
@@ -11,6 +15,16 @@ function msToIso(v) {
   } catch {
     return null;
   }
+}
+
+/** 'MM/DD/YYYY' (optionally followed by a time) -> 'YYYY-MM-DD'; null-safe; other shapes pass through. */
+export function usDateToIso(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return msToIso(v);
+  const m = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(v));
+  if (!m) return String(v).trim();
+  const [, mm, dd, yyyy] = m;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
 function coord(attrs, key, geometry, axis) {
@@ -46,7 +60,7 @@ export const SOURCES = [
       county: a.CountyName,
       latitude: coord(a, "Latitude", g, "y"),
       longitude: coord(a, "Longitude", g, "x"),
-      spudDate: a.SpudDate || null,
+      spudDate: usDateToIso(a.SpudDate),
       district: a.District,
       confidential: a.isConfidential,
     }),
@@ -77,9 +91,11 @@ export const SOURCES = [
       county: a.CountyName,
       latitude: coord(a, "Lat83", g, "y"),
       longitude: coord(a, "Long83", g, "x"),
-      spudDate: a.SpudDate || null,
-      completionDate: a.CompDate || null,
-      abandonDate: a.ABDdate || null,
+      // live layer types these as Integer and they are null on every row checked 2026-09-15;
+      // usDateToIso handles either a US string or an epoch number if CalGEM starts filling them
+      spudDate: usDateToIso(a.SpudDate),
+      completionDate: usDateToIso(a.CompDate),
+      abandonDate: usDateToIso(a.ABDdate),
       directional: a.Directional,
     }),
   },
