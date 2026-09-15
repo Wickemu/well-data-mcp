@@ -10,8 +10,9 @@ import { queryLayer, countLayer, likeClause, eqClause, apiMatchClauses, sqlQuote
 import { SOURCES, findSources, normalizeRecord, INTERNATIONAL_NOTES } from "./states.js";
 import { queryBssBoreholes } from "./wfs.js";
 import { searchGem, gemDatasets } from "./gem.js";
+import { VERSION, USER_AGENT } from "./meta.js";
 
-const server = new McpServer({ name: "well-data", version: "0.1.0" });
+const server = new McpServer({ name: "well-data", version: VERSION });
 
 const STATE_KEYS = [...new Set(SOURCES.map((s) => s.state))];
 const SOURCE_KEYS = SOURCES.map((s) => s.key);
@@ -432,7 +433,7 @@ server.registerTool(
     try {
       const res = await fetch(`${OSTI_DE}?${qs}`, {
         signal: ctrl.signal,
-        headers: { Accept: "application/json", "User-Agent": "well-data-mcp/0.1" },
+        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
       });
       if (!res.ok) return err(`OSTI Data Explorer HTTP ${res.status}`);
       const recs = await res.json();

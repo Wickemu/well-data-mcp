@@ -1,9 +1,33 @@
 {
   "name": "well-data-mcp",
   "version": "0.1.0",
-  "description": "MCP server for oil & gas / geothermal well data from state regulator ArcGIS services (CA, UT, NM, CO, ND, TX, NV)",
+  "description": "Keyless MCP server for oil & gas / geothermal well data: live state regulator ArcGIS layers (CA, UT, NM, CO, ND, TX, NV), New Zealand petroleum wells (NZP&M), Guadeloupe/France boreholes (BRGM BSS via WFS), DOE geothermal datasets (GDR via OSTI Data Explorer) and bundled Global Energy Monitor trackers",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "oil-gas",
+    "geothermal",
+    "wells",
+    "api-number",
+    "arcgis",
+    "wfs",
+    "state-regulator",
+    "global-energy-monitor",
+    "gdr"
+  ],
   "type": "module",
   "main": "src/index.js",
+  "bin": {
+    "well-data-mcp": "src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src",
+    "data",
+    "README.md"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test \"test/*.test.js\"",

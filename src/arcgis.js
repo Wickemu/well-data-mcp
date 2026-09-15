@@ -1,6 +1,8 @@
 // Generic ArcGIS REST layer query client (MapServer + FeatureServer layers).
 // All state regulator endpoints speak the same query grammar; this is the one wrapper.
 
+import { USER_AGENT } from "./meta.js";
+
 const TIMEOUT_MS = 30_000;
 
 async function fetchJson(url, params) {
@@ -8,7 +10,7 @@ async function fetchJson(url, params) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}?${qs}`, { signal: ctrl.signal });
+    const res = await fetch(`${url}?${qs}`, { signal: ctrl.signal, headers: { "User-Agent": USER_AGENT } });
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
     const data = await res.json();
     if (data.error) throw new Error(`ArcGIS error ${data.error.code}: ${data.error.message} (${url})`);
