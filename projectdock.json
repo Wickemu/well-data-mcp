@@ -1,0 +1,4 @@
+{
+  "kind": "none",
+  "label": "MCP server over stdio (npm start serves no site); launched by an MCP client"
+}
