@@ -13,6 +13,7 @@ import { radiusToBbox, extentIntersects, withinRadius, haversineKm } from "./geo
 import { searchGem, gemDatasets } from "./gem.js";
 import { searchGeothermalDatasets } from "./osti.js";
 import { searchGdr } from "./gdr.js";
+import { searchHeatFlow, heatflowDataset } from "./heatflow.js";
 import { VERSION } from "./meta.js";
 
 const server = new McpServer({ name: "well-data", version: VERSION });
@@ -193,7 +194,10 @@ server.registerTool(
               "For DOE-funded geothermal datasets (logs, stimulation, flow tests, microseismic - incl. Fervo Cape Station, Utah FORGE), use search_geothermal_datasets; give it a latitude/longitude to find datasets covering a place.",
             globalProjects:
               "For plant/field-level coverage worldwide, including countries with no well registry, use search_gem_projects (bundled Global Energy Monitor trackers).",
+            heatFlow:
+              "For heat flow, temperature gradients and thermal conductivity anywhere in the world (geothermal screening, incl. countries with no well registry), use search_heat_flow (bundled IHFC Global Heat Flow Database).",
             gemReleases: await gemDatasets(),
+            heatFlowRelease: await heatflowDataset(),
           }),
       ...(notes.length ? { noRegistry: notes } : {}),
     });
@@ -458,6 +462,51 @@ server.registerTool(
       latitude != null && longitude != null && radius_km != null ? { latitude, longitude, radius_km } : null;
     const results = await searchGem({ dataset, country, name, operator, status, near, limit });
     return json({ results, attribution: "Global Energy Monitor (CC BY 4.0)" });
+  }
+);
+
+// ---------------------------------------------------- search_heat_flow
+
+server.registerTool(
+  "search_heat_flow",
+  {
+    title: "Search heat flow measurements (IHFC)",
+    description:
+      "Search the bundled IHFC Global Heat Flow Database: ~91,000 heat-flow measurements at ~72,000 sites worldwide, from boreholes (oil & gas, geothermal, mining, groundwater, research), ocean and lake probes, mines and tunnels. Each record has heat flow (mW/m2), and where measured the temperature gradient (K/km), thermal conductivity (W/mK), depth, purpose and year. Use it for geothermal screening anywhere - including countries with no public well registry (Kenya, Namibia, Indonesia...). A radius search returns the nearest first plus summary statistics over every match. Local data - fast, works offline. Typical continental heat flow is 50-80 mW/m2; geothermal areas run far higher, and very shallow holes in volcanic ground can show extreme values - add min_depth_m to drop them. quality is the IHFC quality code (U = uncertainty, M = method score; x = not assessed). Cite the IHFC Global Heat Flow Database (the citation is in every response).",
+    inputSchema: {
+      latitude: z.number().min(-90).max(90).optional().describe("With longitude + radius_km: measurements within the radius, nearest first."),
+      longitude: z.number().min(-180).max(180).optional(),
+      radius_km: z.number().min(0.1).max(2000).default(50),
+      name: z.string().optional().describe("Site or well name, partial match (e.g. 'Habanero', 'Olkaria')."),
+      purpose: z.string().optional().describe("Purpose of the hole: geothermal, hydrocarbon, mining, groundwater, research, mapping."),
+      method: z.string().optional().describe("Exploration method: drilling, probing, mining, tunneling."),
+      environment: z.string().optional().describe("onshore or offshore (also 'marine', 'lake')."),
+      min_heat_flow: z.number().min(0).optional().describe("Only measurements at or above this heat flow (mW/m2)."),
+      min_depth_m: z.number().min(0).optional().describe("Only holes at least this deep (metres, TVD or else MD)."),
+      limit: z.number().int().min(1).max(200).default(25),
+    },
+  },
+  async ({ latitude, longitude, radius_km, name, purpose, method, environment, min_heat_flow, min_depth_m, limit }) => {
+    const spatial = latitude != null && longitude != null;
+    if (!spatial && !name && !purpose && !method && !environment && min_heat_flow == null && min_depth_m == null) {
+      return err("Provide latitude + longitude, or at least one filter (name, purpose, method, environment, min_heat_flow, min_depth_m).");
+    }
+    try {
+      return json(
+        await searchHeatFlow({
+          near: spatial ? { latitude, longitude, radiusKm: radius_km } : null,
+          name,
+          purpose,
+          method,
+          environment,
+          minHeatFlow: min_heat_flow,
+          minDepth: min_depth_m,
+          limit,
+        })
+      );
+    } catch (e) {
+      return err(`Heat flow data not available: ${e.message}. Run scripts/convert-ihfc.py on a GHFDB release.`);
+    }
   }
 );
 

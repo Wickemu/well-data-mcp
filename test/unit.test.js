@@ -207,3 +207,21 @@ test("looseNum reads decimal commas and unit suffixes", async () => {
   assert.equal(looseNum(""), null);
   assert.equal(num("1,327"), 1327);
 });
+
+test("heat flow bundle: loads, filters, radius search nearest-first with summary stats", async () => {
+  const { searchHeatFlow, heatflowDataset } = await import("../src/heatflow.js");
+  const meta = await heatflowDataset();
+  assert.ok(meta && meta.measurements > 80_000, "bundle present with the full release");
+  assert.match(meta.license, /CC BY 4\.0/);
+  const near = await searchHeatFlow({ near: { latitude: 38.5, longitude: -112.9, radiusKm: 20 }, limit: 5 }); // Milford, UT
+  assert.ok(near.matched > 50);
+  assert.ok(near.records.every((r, i, a) => i === 0 || a[i - 1].distanceKm <= r.distanceKm), "nearest first");
+  assert.ok(near.summary.heatFlow_mW_m2.median > 80, "Roosevelt Hot Springs area runs hot");
+  assert.match(near.citation, /Global Heat Flow/);
+  const deep = await searchHeatFlow({ purpose: "geothermal", minDepth: 1000, limit: 3 });
+  assert.ok(deep.records.every((r) => r.purpose.includes("geothermal") && (r.depthTVD ?? r.depthMD) >= 1000));
+  assert.ok(deep.records.every((r, i, a) => i === 0 || a[i - 1].heatFlow >= r.heatFlow), "hottest first without a point");
+  const none = await searchHeatFlow({ near: { latitude: 0, longitude: -140, radiusKm: 0.5 } });
+  assert.equal(none.matched, 0);
+  assert.equal(none.summary, null);
+});
