@@ -97,6 +97,14 @@ if (!only.length) {
     line(false, "OSTI", "search", e.message);
   }
   try {
+    const { searchHeatFlow } = await import("../src/heatflow.js");
+    // Cooper Basin (Habanero): one of the world's best-known hot-rock heat-flow areas
+    const r = await searchHeatFlow({ near: { latitude: -27.8, longitude: 140.75, radiusKm: 50 }, limit: 3 });
+    line(r.matched > 0, "IHFC", "local", `${r.matched} heat-flow measurement(s) within 50 km of Habanero, median ${r.summary?.heatFlow_mW_m2?.median} mW/m2 (${r.release})`);
+  } catch (e) {
+    line(false, "IHFC", "local", e.message);
+  }
+  try {
     const r = await searchGem({ dataset: "geothermal", operator: "Fervo", limit: 3 });
     line((r[0]?.matched ?? 0) > 0, "GEM", "local", `${r[0]?.matched ?? 0} Fervo geothermal unit(s) in bundle (${r[0]?.release})`);
   } catch (e) {
