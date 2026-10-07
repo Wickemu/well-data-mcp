@@ -1,21 +1,28 @@
 #!/usr/bin/env node
-// well-data-mcp — MCP server for oil & gas / geothermal well data from
-// state regulator ArcGIS services. Stdio transport; register with:
+// well-data-mcp — MCP server for oil & gas / geothermal well data from public
+// regulator and geological-survey services worldwide. Stdio transport; register with:
 //   claude mcp add --scope user well-data -- node <path>/src/index.js
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { queryLayer, countLayer, likeClause, eqClause, apiMatchClauses, sqlQuote, nearParams } from "./arcgis.js";
-import { SOURCES, findSources, normalizeRecord, INTERNATIONAL_NOTES } from "./states.js";
-import { queryBssBoreholes } from "./wfs.js";
+import { SOURCES, findSources, normalizeRecord, NO_REGISTRY_NOTES } from "./sources/index.js";
+import { providerFor } from "./providers/index.js";
+import { apiStateOf, looksLikeUsApi } from "./api-number.js";
+import { radiusToBbox, extentIntersects, withinRadius, haversineKm } from "./geo.js";
 import { searchGem, gemDatasets } from "./gem.js";
-import { VERSION, USER_AGENT } from "./meta.js";
+import { searchGeothermalDatasets } from "./osti.js";
+import { searchGdr } from "./gdr.js";
+import { VERSION } from "./meta.js";
 
 const server = new McpServer({ name: "well-data", version: VERSION });
 
-const STATE_KEYS = [...new Set(SOURCES.map((s) => s.state))];
+const COUNTRY_KEYS = [...new Set(SOURCES.map((s) => s.country))].sort();
+// Countries a caller may name: those with sources plus those with a no-registry note.
+const COUNTRY_ARGS = [...new Set([...COUNTRY_KEYS, ...NO_REGISTRY_NOTES.flatMap((n) => n.countries)])].sort();
+const STATE_KEYS = [...new Set(SOURCES.map((s) => s.state).filter(Boolean))].sort();
 const SOURCE_KEYS = SOURCES.map((s) => s.key);
+const FILTER_KEYS = ["operator", "well_name", "api", "county", "field", "status", "well_type"];
 
 function json(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -25,114 +32,13 @@ function err(message) {
   return { content: [{ type: "text", text: JSON.stringify({ error: message }) }], isError: true };
 }
 
-/** Build a WHERE clause from normalized filters against one source's field map. */
-function buildWhere(source, filters) {
-  const clauses = [];
-  const unsupported = [];
-  for (const [k, v] of Object.entries(filters)) {
-    if (v == null || v === "") continue;
-    const field = source.searchFields[k];
-    if (!field) {
-      unsupported.push(k);
-      continue;
-    }
-    clauses.push(k === "api" ? eqClause(field, v) : likeClause(field, v));
-  }
-  return { where: clauses.length ? clauses.join(" AND ") : "1=1", unsupported };
-}
-
-function normalizeFeatures(source, features) {
-  return features.map((f) => ({
+function normalizeRows(source, rows) {
+  return rows.map((r) => ({
     source: source.key,
-    state: source.state,
-    ...normalizeRecord(source, f.attributes, f.geometry),
+    country: source.country,
+    ...(source.state ? { state: source.state } : {}),
+    ...normalizeRecord(source, r.attrs, r.geometry),
   }));
-}
-
-function radiusToBbox(latitude, longitude, radiusMeters) {
-  const dLat = radiusMeters / 111_320;
-  const dLon = radiusMeters / (111_320 * Math.cos((latitude * Math.PI) / 180));
-  return [latitude - dLat, longitude - dLon, latitude + dLat, longitude + dLon];
-}
-
-async function searchBssSource(source, filters, { limit, bbox = null }) {
-  const box = bbox ?? source.defaultBbox;
-  const features = await queryBssBoreholes({ bbox: box, count: Math.min(limit * 5, source.pageMax) });
-  const nameFilter = (filters.well_name ?? "").toUpperCase();
-  const unsupported = Object.entries(filters)
-    .filter(([k, v]) => v != null && v !== "" && k !== "well_name")
-    .map(([k]) => k);
-  let wells = features.map((f) => {
-    const [x, y] = f.geometry?.coordinates ?? [null, null];
-    return { source: source.key, state: source.state, ...normalizeRecord(source, f.properties, { x, y }) };
-  });
-  if (nameFilter) {
-    wells = wells.filter((w) =>
-      [w.wellName, w.api, w.bssReference].some((v) => v && String(v).toUpperCase().includes(nameFilter))
-    );
-  }
-  wells = wells.slice(0, limit);
-  return {
-    source: source.key,
-    label: source.label,
-    agency: source.agency,
-    bboxSearched: box,
-    returned: wells.length,
-    moreAvailable: features.length >= Math.min(limit * 5, source.pageMax),
-    wells,
-    ...(unsupported.length
-      ? { unsupportedFilters: unsupported, note: `BSS supports only well_name + location filters; ignored: ${unsupported.join(", ")}.` }
-      : {}),
-    caveat: source.caveat,
-  };
-}
-
-/** queryLayer with per-source quirks applied (reprojection bug, 500-on-empty bug). */
-async function querySourceLayer(source, opts) {
-  try {
-    return await queryLayer(source.url, { ...opts, noReproject: source.noReproject });
-  } catch (e) {
-    if (source.emptyResultBug && /error 500/i.test(String(e.message))) {
-      return { features: [], exceededLimit: false, emptyOr500: true };
-    }
-    throw e;
-  }
-}
-
-async function searchOneSource(source, filters, { limit, offset, geometryParams = null, countOnly = false, bbox = null }) {
-  if (source.kind === "wfs-bss") {
-    if (countOnly) {
-      const r = await searchBssSource(source, filters, { limit: source.pageMax, bbox });
-      return { source: source.key, label: source.label, count: r.returned, approximate: true };
-    }
-    return searchBssSource(source, filters, { limit, bbox });
-  }
-  const { where, unsupported } = buildWhere(source, filters);
-  if (countOnly) {
-    const count = await countLayer(source.url, { where, geometryParams });
-    return { source: source.key, label: source.label, count, unsupportedFilters: unsupported };
-  }
-  const capped = Math.min(limit, source.pageMax);
-  const { features, exceededLimit } = await querySourceLayer(source, {
-    where,
-    limit: capped,
-    offset,
-    geometryParams,
-  });
-  const out = {
-    source: source.key,
-    label: source.label,
-    agency: source.agency,
-    returned: features.length,
-    moreAvailable: exceededLimit,
-    wells: normalizeFeatures(source, features),
-  };
-  if (unsupported.length) {
-    out.unsupportedFilters = unsupported;
-    out.note = `This source cannot filter on: ${unsupported.join(", ")} (fields not present in its GIS layer).`;
-  }
-  if (source.caveat) out.caveat = source.caveat;
-  return out;
 }
 
 /** Run a task across selected sources, tolerating per-source failures. */
@@ -147,130 +53,265 @@ async function acrossSources(sources, task) {
   return { results, failures };
 }
 
+function withFailures(body, failures) {
+  return failures.length ? { ...body, sourceErrors: failures } : body;
+}
+
+function unsupportedNote(source, unsupported) {
+  if (!unsupported?.length) return {};
+  return {
+    unsupportedFilters: unsupported,
+    note: `${source.key} cannot filter on: ${unsupported.join(", ")} (not in its data); those filters were ignored.`,
+  };
+}
+
+async function searchOneSource(source, filters, { limit, offset, near = null, countOnly = false }) {
+  const provider = providerFor(source);
+  const asked = Object.keys(filters);
+  if (source.requiresOneOf && !asked.some((k) => source.requiresOneOf.includes(k))) {
+    return {
+      source: source.key,
+      label: source.label,
+      skipped: true,
+      note: `${source.key} needs one of: ${source.requiresOneOf.join(", ")} (a statewide query would be too large).`,
+    };
+  }
+  if (asked.length && asked.every((k) => !source.searchFields[k])) {
+    // None of the filters apply here; querying anyway would return the whole layer unfiltered.
+    return {
+      source: source.key,
+      label: source.label,
+      skipped: true,
+      note: `${source.key} cannot filter on ${asked.join(", ")}; searchable here: ${Object.keys(source.searchFields).join(", ")}.`,
+    };
+  }
+  if (countOnly) {
+    const { count, approximate, unsupported } = await provider.count(source, filters, { near });
+    return {
+      source: source.key,
+      label: source.label,
+      count,
+      ...(approximate ? { approximate: true } : {}),
+      ...unsupportedNote(source, unsupported),
+    };
+  }
+  // Radius searches over-fetch: servers return matches in arbitrary order (and bbox-only
+  // providers return the box corners too), so take extra, trim to the circle, keep the nearest.
+  const fetchLimit = near ? Math.min(limit * 3, source.pageMax) : limit;
+  const result = await provider.search(source, filters, { limit: fetchLimit, offset, near });
+  const { rows, unsupported } = result;
+  let { moreAvailable } = result;
+  let wells = normalizeRows(source, rows);
+  if (near) {
+    wells = withinRadius(wells, near).map((w) => ({
+      ...w,
+      distanceKm: Math.round(haversineKm(near.latitude, near.longitude, w.latitude, w.longitude) * 100) / 100,
+    }));
+    wells.sort((a, b) => a.distanceKm - b.distanceKm);
+    if (wells.length > limit) moreAvailable = true;
+    wells = wells.slice(0, limit);
+  }
+  return {
+    source: source.key,
+    label: source.label,
+    agency: source.agency,
+    returned: wells.length,
+    moreAvailable,
+    wells,
+    ...unsupportedNote(source, unsupported),
+    ...(source.caveat ? { caveat: source.caveat } : {}),
+  };
+}
+
+const countryArg = z
+  .enum(COUNTRY_ARGS)
+  .optional()
+  .describe(`ISO 3166-1 alpha-2 country code. With sources: ${COUNTRY_KEYS.join(", ")} (EU = pan-European). Others listed return a note on why there is no registry.`);
+const stateArg = z
+  .enum(STATE_KEYS)
+  .optional()
+  .describe(
+    "State / province / region code within the country: US postal codes (CA, UT, TX...) and OCS-GOM / OCS-PAC / OCS-AK / OCS-ATL for federal offshore, Canadian provinces (BC, SK, ON...), Australian states (SA, QLD, WA), NZ regions (WKO, BOP). WA alone matches both Washington and Western Australia; add country to pick one."
+  );
+const sourceArg = z.enum(SOURCE_KEYS).optional().describe("Exact source key from list_sources (e.g. CA-GEO). Overrides country/state.");
+
+function selectSources({ source, country, state }) {
+  return source ? findSources({ key: source }) : findSources({ country, state });
+}
+
+/** Error body for a country/state with no sources, carrying any no-registry note. */
+function noSources(country, state) {
+  const notes = NO_REGISTRY_NOTES.filter((n) => country && n.countries.includes(country));
+  return {
+    error: `No sources match country=${country ?? "*"} state=${state ?? "*"}.`,
+    ...(notes.length ? { noRegistry: notes } : {}),
+    hint: "search_gem_projects has plant/field-level data worldwide; list_sources shows coverage.",
+  };
+}
+
 // ---------------------------------------------------------------- list_sources
+
+function sourceDetail(s) {
+  return {
+    key: s.key,
+    country: s.country,
+    ...(s.state ? { state: s.state } : {}),
+    label: s.label,
+    agency: s.agency,
+    protocol: s.kind ?? "arcgis",
+    endpoint: s.url,
+    searchableFilters: Object.keys(s.searchFields),
+    idType: s.idKind === "us-api" ? "US API number" : s.idLabel ?? "source well identifier",
+    maxPageSize: s.pageMax,
+    radiusSearch: !s.noNear,
+    ...(s.license ? { license: s.license } : {}),
+    ...(s.caveat ? { caveat: s.caveat } : {}),
+  };
+}
 
 server.registerTool(
   "list_sources",
   {
     title: "List well-data sources",
     description:
-      "List the state regulator well-data sources this server can query: coverage, agency, searchable filters, and caveats. Call this first to see what is available.",
-    inputSchema: {},
+      "List the well-data sources this server can query - US state regulators, provincial and national regulators, and geological surveys worldwide - plus places checked and found to have no public machine-readable registry. Call this first. Without arguments it returns a compact index (key, country, state, label); pass country, state or source for full detail (endpoint, searchable filters, id type, caveats, licence).",
+    inputSchema: { country: countryArg, state: stateArg, source: sourceArg },
   },
-  async () =>
-    json({
-      sources: SOURCES.map((s) => ({
-        key: s.key,
-        state: s.state,
-        label: s.label,
-        agency: s.agency,
-        endpoint: s.url,
-        searchableFilters: Object.keys(s.searchFields),
-        maxPageSize: s.pageMax,
-        ...(s.caveat ? { caveat: s.caveat } : {}),
-      })),
-      geothermalProjectData:
-        "For geothermal project/well datasets (logs, stimulation, flow tests, microseismic - incl. Fervo Cape Station, Utah FORGE), use search_geothermal_datasets.",
-      globalProjects:
-        "For plant/field-level coverage worldwide (incl. Kenya, Guatemala, Guadeloupe, Namibia, NZ), use search_gem_projects (bundled Global Energy Monitor trackers).",
-      gemReleases: await gemDatasets(),
-      noRegistryCountries: INTERNATIONAL_NOTES,
-    })
+  async ({ country, state, source }) => {
+    const sources = selectSources({ source, country, state });
+    const detailed = Boolean(country || state || source);
+    const notes = NO_REGISTRY_NOTES.filter((n) => !country || n.countries.includes(country));
+    return json({
+      sources: detailed
+        ? sources.map(sourceDetail)
+        : sources.map((s) => ({ key: s.key, country: s.country, ...(s.state ? { state: s.state } : {}), label: s.label })),
+      ...(detailed
+        ? {}
+        : {
+            countries: COUNTRY_KEYS,
+            geothermalProjectData:
+              "For DOE-funded geothermal datasets (logs, stimulation, flow tests, microseismic - incl. Fervo Cape Station, Utah FORGE), use search_geothermal_datasets; give it a latitude/longitude to find datasets covering a place.",
+            globalProjects:
+              "For plant/field-level coverage worldwide, including countries with no well registry, use search_gem_projects (bundled Global Energy Monitor trackers).",
+            gemReleases: await gemDatasets(),
+          }),
+      ...(notes.length ? { noRegistry: notes } : {}),
+    });
+  }
 );
 
 // ---------------------------------------------------------------- search_wells
-
-const searchShape = {
-  state: z
-    .enum(STATE_KEYS)
-    .optional()
-    .describe("Two-letter state code to search. Omit to search ALL states (slower; prefer setting it)."),
-  source: z
-    .enum(SOURCE_KEYS)
-    .optional()
-    .describe("Exact source key (e.g. CA-GEO for California geothermal only). Overrides state."),
-  operator: z.string().optional().describe("Operator/company name, partial match, case-insensitive (e.g. 'Fervo', 'California Resources')."),
-  well_name: z.string().optional().describe("Well or lease name, partial match."),
-  api: z.string().optional().describe("API well number exactly as the state formats it. For cross-state API lookup use get_well instead."),
-  county: z.string().optional().describe("County name, partial match."),
-  field: z.string().optional().describe("Field name, partial match."),
-  status: z.string().optional().describe("Well status, partial match (vocabulary varies by state: 'Active', 'Plugged', 'New', ...)."),
-  well_type: z.string().optional().describe("Well type, partial match (e.g. 'OG', 'Geothermal', 'Water Disposal'; vocabulary varies by state)."),
-  limit: z.number().int().min(1).max(500).default(25).describe("Max records per source (default 25)."),
-  offset: z.number().int().min(0).default(0).describe("Pagination offset within each source."),
-  count_only: z.boolean().default(false).describe("If true, return only match counts per source — cheap way to size a query first."),
-};
 
 server.registerTool(
   "search_wells",
   {
     title: "Search wells",
     description:
-      "Search state regulator well databases by operator, well/lease name, county, field, status, or type. Returns normalized records (API number, name, operator, status, type, field, county, lat/lon, dates, depths where available) plus source-specific extras. All *Date fields are normalized to ISO 'YYYY-MM-DD' strings (or null) regardless of how the source stores them, so they sort and compare across states. Filters combine with AND. Set count_only=true to size a query before pulling records.",
-    inputSchema: searchShape,
+      "Search well registries by operator, well name, county/area, field, status, or type. Returns normalized records (well id, name, operator, status, type, field, county, lat/lon, dates, depths where available) plus source-specific extras. All *Date fields are ISO 'YYYY-MM-DD' strings (or null) regardless of how the source stores them. Text filters are case-insensitive partial matches combined with AND. Set count_only=true to size a query first. Omitting country/state/source searches every source (slow) - set one when you can.",
+    inputSchema: {
+      country: countryArg,
+      state: stateArg,
+      source: sourceArg,
+      operator: z.string().optional().describe("Operator/company/licensee name, partial match (e.g. 'Fervo', 'Equinor')."),
+      well_name: z.string().optional().describe("Well, wellbore or lease name, partial match."),
+      api: z.string().optional().describe("Well identifier exactly as the source formats it (US API number, UWI, wellbore name). For a lookup that tolerates formatting differences use get_well."),
+      county: z.string().optional().describe("County / district / area name, partial match."),
+      field: z.string().optional().describe("Field name, partial match."),
+      status: z.string().optional().describe("Well status, partial match (vocabulary varies by source: 'Active', 'Plugged', 'P&A', ...)."),
+      well_type: z.string().optional().describe("Well type or purpose, partial match (e.g. 'Oil', 'Gas', 'Geothermal', 'Injection'; vocabulary varies by source)."),
+      limit: z.number().int().min(1).max(500).default(25).describe("Max records per source (default 25)."),
+      offset: z.number().int().min(0).default(0).describe("Pagination offset within each source."),
+      count_only: z.boolean().default(false).describe("If true, return only match counts per source."),
+    },
   },
   async (args) => {
-    const { state, source, limit, offset, count_only, ...filters } = args;
-    const sources = findSources(source ? { key: source } : { state });
-    if (!sources.length) return err(`No sources match state=${state} source=${source}`);
-    if (!Object.values(filters).some((v) => v != null && v !== "") && count_only !== true) {
-      return err("Provide at least one filter (operator, well_name, api, county, field, status, well_type), or set count_only=true.");
+    const { country, state, source, limit, offset, count_only } = args;
+    const filters = Object.fromEntries(FILTER_KEYS.map((k) => [k, args[k]]).filter(([, v]) => v != null && v !== ""));
+    const sources = selectSources({ source, country, state });
+    if (!sources.length) return json(noSources(country, state));
+    if (!Object.keys(filters).length && !count_only) {
+      return err(`Provide at least one filter (${FILTER_KEYS.join(", ")}), or set count_only=true.`);
     }
     const { results, failures } = await acrossSources(sources, (s) =>
       searchOneSource(s, filters, { limit, offset, countOnly: count_only })
     );
-    return json({ results, ...(failures.length ? { sourceErrors: failures } : {}) });
+    const skipped = results.filter((r) => r.skipped);
+    const answered = results.filter((r) => !r.skipped && (count_only ? r.count !== 0 : r.returned > 0));
+    const empty = results.filter((r) => !r.skipped && !answered.includes(r)).map((r) => r.source);
+    return json(
+      withFailures(
+        {
+          results: answered,
+          ...(empty.length ? { noMatchesIn: empty } : {}),
+          ...(skipped.length ? { skipped: skipped.map(({ source, note }) => ({ source, note })) } : {}),
+        },
+        failures
+      )
+    );
   }
 );
 
 // ---------------------------------------------------------------- get_well
 
+/** Which sources get_well should ask for an identifier, and why. */
+function routeIdLookup(id, { source, country, state }) {
+  if (source || country || state) return { sources: selectSources({ source, country, state }) };
+  if (looksLikeUsApi(id)) {
+    const apiState = apiStateOf(id);
+    const usApi = SOURCES.filter((s) => s.idKind === "us-api");
+    if (!apiState) return { sources: usApi };
+    const inState = usApi.filter((s) => s.state === apiState || s.apiStates?.includes(apiState));
+    return {
+      sources: inState,
+      routedBy: `API prefix ${String(id).replace(/\D/g, "").slice(0, 2)} = ${apiState}`,
+      ...(inState.length ? {} : { uncovered: apiState }),
+    };
+  }
+  return { sources: SOURCES.filter((s) => s.idKind !== "us-api") };
+}
+
 server.registerTool(
   "get_well",
   {
-    title: "Get well by API number",
+    title: "Get a well by its identifier",
     description:
-      "Look up a specific well by API number and return its FULL raw record from the state source plus the normalized summary. Handles formatting differences (dashes, state prefixes): tries an exact match first, then the bare digits, then a dash-tolerant contains-match on the county + sequence digits — so undashed input still finds wells in sources that store dashed APIs (NM, ND, CO, NV). If state is omitted, tries every state.",
+      "Look up one well by identifier and return its FULL raw record plus the normalized summary. US API numbers in any format (dashes, 10/12/14 digits) are routed to the right state by their 2-digit API state prefix and matched dash-tolerantly. Non-US identifiers (Canadian UWI, Norwegian wellbore name like '15/9-19 A', NLOG/BSS codes...) are matched exactly, then as a contains-match; pass country or source for these to avoid asking every source.",
     inputSchema: {
-      api: z.string().describe("API well number in any common format (e.g. 04-029-12345, 0402912345, 33-053-04652, 4300712345)."),
-      state: z.enum(STATE_KEYS).optional().describe("Two-letter state code if known (much faster)."),
+      api: z.string().min(3).describe("Well identifier: US API number (e.g. 04-029-12345, 4300712345), UWI, wellbore name, or the source's own well code."),
+      country: countryArg,
+      state: stateArg,
+      source: sourceArg,
     },
   },
-  async ({ api, state }) => {
-    const digits = api.replace(/\D/g, "");
-    if (digits.length < 5) return err("API number too short after removing non-digits.");
-    const sources = findSources({ state });
-    const task = async (s) => {
-      if (s.kind === "wfs-bss") return null; // BSS ids are not API numbers; use search_wells well_name instead
-      const field = s.searchFields.api;
-      if (!field) throw new Error("source has no API field");
-      // exact as given, exact digits, then dash-tolerant contains on county+sequence
-      for (const where of apiMatchClauses(field, api)) {
-        const { features } = await querySourceLayer(s, { where, limit: 5 });
-        if (features.length) {
-          return {
-            source: s.key,
-            label: s.label,
-            agency: s.agency,
-            matches: features.map((f) => ({
-              normalized: { source: s.key, state: s.state, ...normalizeRecord(s, f.attributes, f.geometry) },
-              raw: f.attributes,
-            })),
-          };
-        }
-      }
-      return null;
-    };
-    const { results, failures } = await acrossSources(sources, task);
-    const hits = results.filter(Boolean);
-    if (!hits.length) {
+  async ({ api, country, state, source }) => {
+    const route = routeIdLookup(api, { source, country, state });
+    if (!route.sources.length && !route.uncovered) return json(noSources(country, state));
+    if (route.uncovered) {
+      const other = findSources({ state: route.uncovered }).map((s) => s.key);
       return json({
         found: false,
-        message: `No well matching '${api}' in ${sources.map((s) => s.key).join(", ")}.`,
-        ...(failures.length ? { sourceErrors: failures } : {}),
+        message: other.length
+          ? `API number '${api}' belongs to ${route.uncovered}, whose sources (${other.join(", ")}) do not index API numbers. Try search_wells with state=${route.uncovered}.`
+          : `API number '${api}' belongs to ${route.uncovered}, which has no registered source. Call list_sources for coverage.`,
       });
     }
-    return json({ found: true, results: hits, ...(failures.length ? { sourceErrors: failures } : {}) });
+    const task = async (s) => {
+      const rows = await providerFor(s).findById(s, api);
+      if (!rows.length) return null;
+      return {
+        source: s.key,
+        label: s.label,
+        agency: s.agency,
+        matches: rows.map((r) => ({ normalized: normalizeRows(s, [r])[0], raw: r.attrs })),
+      };
+    };
+    const { results, failures } = await acrossSources(route.sources, task);
+    const hits = results.filter(Boolean);
+    const body = hits.length
+      ? { found: true, results: hits }
+      : { found: false, message: `No well matching '${api}' in ${route.sources.map((s) => s.key).join(", ") || "any source"}.` };
+    if (route.routedBy) body.routedBy = route.routedBy;
+    return json(withFailures(body, failures));
   }
 );
 
@@ -281,44 +322,66 @@ server.registerTool(
   {
     title: "Find wells near a point",
     description:
-      "Find wells within a radius of a lat/lon point — e.g. all wells on or around a pad, lease, or project site. Searches the geographically relevant sources unless state/source is given.",
+      "Find wells within a radius of a lat/lon point - all wells on or around a pad, lease, field or project site. Only sources whose coverage area overlaps the circle are asked, so this works anywhere in the world without picking a source. Results are sorted by distance.",
     inputSchema: {
       latitude: z.number().min(-90).max(90),
       longitude: z.number().min(-180).max(180),
       radius_km: z.number().min(0.01).max(100).default(3).describe("Search radius in kilometers (default 3)."),
-      state: z.enum(STATE_KEYS).optional(),
-      source: z.enum(SOURCE_KEYS).optional(),
-      limit: z.number().int().min(1).max(500).default(50),
+      country: countryArg,
+      state: stateArg,
+      source: sourceArg,
+      limit: z.number().int().min(1).max(500).default(50).describe("Max records per source."),
     },
   },
-  async ({ latitude, longitude, radius_km, state, source, limit }) => {
-    const sources = findSources(source ? { key: source } : { state });
-    const geometryParams = nearParams(latitude, longitude, radius_km * 1000);
-    const bbox = radiusToBbox(latitude, longitude, radius_km * 1000);
-    const { results, failures } = await acrossSources(sources, (s) =>
-      searchOneSource(s, {}, { limit, offset: 0, geometryParams, bbox })
+  async ({ latitude, longitude, radius_km, country, state, source, limit }) => {
+    const box = radiusToBbox(latitude, longitude, radius_km * 1000);
+    const sources = selectSources({ source, country, state }).filter(
+      (s) => !s.noNear && (source || extentIntersects(s.extent, box))
     );
-    const nonEmpty = results.filter((r) => r.returned > 0);
-    return json({
-      center: { latitude, longitude },
-      radius_km,
-      results: nonEmpty,
-      ...(failures.length ? { sourceErrors: failures } : {}),
-    });
+    if (!sources.length) {
+      return json({
+        center: { latitude, longitude },
+        radius_km,
+        results: [],
+        message: "No registered source covers this location. Try search_gem_projects for plant/field-level data, or list_sources for coverage.",
+        ...(country ? { ...noSources(country, state), error: undefined } : {}),
+      });
+    }
+    const near = { latitude, longitude, radiusKm: radius_km };
+    const { results, failures } = await acrossSources(sources, (s) => searchOneSource(s, {}, { limit, offset: 0, near }));
+    const found = results.filter((r) => r.returned > 0);
+    // Nothing nearby: say what is known about coverage in the countries asked.
+    const askedCountries = new Set(sources.map((s) => s.country));
+    const notes = found.length ? [] : NO_REGISTRY_NOTES.filter((n) => n.countries.some((c) => askedCountries.has(c)));
+    return json(
+      withFailures(
+        {
+          center: { latitude, longitude },
+          radius_km,
+          sourcesAsked: sources.map((s) => s.key),
+          results: found,
+          ...(found.length ? {} : { hint: "No wells found in range. search_gem_projects has plant/field-level data; search_geothermal_datasets covers DOE geothermal studies." }),
+          ...(notes.length ? { noRegistry: notes } : {}),
+        },
+        failures
+      )
+    );
   }
 );
 
 // ---------------------------------------------------------------- raw_query
 
+const RAW_SOURCE_KEYS = SOURCES.filter((s) => providerFor(s).canRaw?.(s)).map((s) => s.key);
+
 server.registerTool(
   "raw_query",
   {
-    title: "Raw ArcGIS query",
+    title: "Raw layer query",
     description:
-      "Escape hatch: run a raw SQL-92 WHERE clause against one source's ArcGIS layer and get raw attributes back. Use list_sources for source keys; field names are the layer's own (see the searchableFilters mapping, or query with where='1=1' limit=1 to inspect a record). Useful for filters the normalized search does not cover (dates, depths, cumulative production).",
+      "Escape hatch: run a raw filter against one source and get raw attributes back - SQL-92 WHERE for ArcGIS sources, CQL for GeoServer WFS sources. Field names are the source's own (see searchableFilters in list_sources, or query with where='1=1' limit=1 to inspect a record). Use it for filters the normalized search does not cover (dates, depths, cumulative production).",
     inputSchema: {
-      source: z.enum(SOURCE_KEYS).describe("Source key, e.g. UT or CA-OG."),
-      where: z.string().describe("ArcGIS SQL-92 where clause, e.g. \"totcum_oil > 1000000 AND county = 'BEAVER'\""),
+      source: z.enum(RAW_SOURCE_KEYS).describe("Source key, e.g. UT or CA-OG."),
+      where: z.string().describe("Filter expression, e.g. \"totcum_oil > 1000000 AND county = 'BEAVER'\""),
       out_fields: z.string().default("*").describe("Comma-separated field list, or * for all."),
       limit: z.number().int().min(1).max(1000).default(50),
       offset: z.number().int().min(0).default(0),
@@ -328,20 +391,15 @@ server.registerTool(
     const [s] = findSources({ key: source });
     if (!s) return err(`Unknown source '${source}'.`);
     try {
-      const { features, exceededLimit } = await querySourceLayer(s, {
-        where,
-        outFields: out_fields,
-        limit: Math.min(limit, s.pageMax),
-        offset,
-      });
+      const { rows, moreAvailable } = await providerFor(s).raw(s, { where, outFields: out_fields, limit, offset });
       return json({
         source: s.key,
-        returned: features.length,
-        moreAvailable: exceededLimit,
-        records: features.map((f) => ({ ...f.attributes, _lat: f.geometry?.y ?? null, _lon: f.geometry?.x ?? null })),
+        returned: rows.length,
+        moreAvailable,
+        records: rows.map((r) => ({ ...r.attrs, _lat: r.geometry?.y ?? null, _lon: r.geometry?.x ?? null })),
       });
     } catch (e) {
-      return err(`Query failed: ${e.message}. Check the where clause against this layer's field names.`);
+      return err(`Query failed: ${e.message}. Check the filter against this source's field names.`);
     }
   }
 );
@@ -353,30 +411,22 @@ server.registerTool(
   {
     title: "List operators matching a name",
     description:
-      "Find the exact operator name strings a state uses (they rarely match what you would guess — 'Fervo Energy Company', 'CALIFORNIA RESOURCES PRODUCTION CORPORATION'). Returns distinct operator names containing the search text, per source. Use before search_wells when an operator search returns nothing.",
+      "Find the exact operator name strings a source uses (they rarely match what you would guess - 'Fervo Energy Company', 'CALIFORNIA RESOURCES PRODUCTION CORPORATION', 'Equinor Energy AS'). Returns distinct operator names containing the search text, per source. Use before search_wells when an operator search returns nothing.",
     inputSchema: {
       name: z.string().min(2).describe("Partial operator name, case-insensitive."),
-      state: z.enum(STATE_KEYS).optional(),
+      country: countryArg,
+      state: stateArg,
     },
   },
-  async ({ name, state }) => {
-    const sources = findSources({ state }).filter((s) => s.searchFields.operator);
+  async ({ name, country, state }) => {
+    const sources = findSources({ country, state }).filter((s) => s.searchFields.operator && providerFor(s).distinct);
     const task = async (s) => {
-      const field = s.searchFields.operator;
-      const { features } = await querySourceLayer(s, {
-        where: likeClause(field, name),
-        outFields: field,
-        limit: Math.min(s.pageMax, 200),
-        distinct: true,
-      });
-      const names = [...new Set(features.map((f) => f.attributes[field]).filter(Boolean))].sort();
+      const values = await providerFor(s).distinct(s, "operator", name);
+      const names = [...new Set(values.filter(Boolean).map((v) => String(v).trim()))].sort();
       return { source: s.key, operators: names.slice(0, 50), truncated: names.length > 50 };
     };
     const { results, failures } = await acrossSources(sources, task);
-    return json({
-      results: results.filter((r) => r.operators.length),
-      ...(failures.length ? { sourceErrors: failures } : {}),
-    });
+    return json(withFailures({ results: results.filter((r) => r.operators.length) }, failures));
   }
 );
 
@@ -387,7 +437,7 @@ server.registerTool(
   {
     title: "Search global energy projects (GEM)",
     description:
-      "Search bundled Global Energy Monitor tracker data: geothermal power units worldwide (Geothermal Power Tracker - covers Kenya/Olkaria, New Zealand, Guadeloupe/Bouillante, Guatemala, US) and upstream oil & gas fields/discoveries (Oil & Gas Extraction Tracker - covers Namibia Orange Basin, Guatemala, NZ). Project/field level, NOT well level. Filters are ANDed, case-insensitive substrings. Local data - fast, works offline. Cite 'Global Energy Monitor' when publishing results.",
+      "Search bundled Global Energy Monitor tracker data: geothermal power units worldwide (Geothermal Power Tracker) and upstream oil & gas fields/discoveries (Oil & Gas Extraction Tracker). Project/field level, NOT well level - the fallback for countries with no public well registry (Kenya, Guatemala, Namibia, Indonesia...). Filters are ANDed, case-insensitive substrings. Local data - fast, works offline. Cite 'Global Energy Monitor' when publishing results.",
     inputSchema: {
       dataset: z.enum(["geothermal", "oilgas", "both"]).default("both"),
       country: z.string().optional().describe("Country/area name, e.g. 'Kenya', 'Namibia', 'New Zealand'."),
@@ -413,50 +463,33 @@ server.registerTool(
 
 // ------------------------------------------- search_geothermal_datasets
 
-const OSTI_DE = "https://www.osti.gov/dataexplorer/api/v1/records";
-
 server.registerTool(
   "search_geothermal_datasets",
   {
     title: "Search DOE geothermal datasets (GDR)",
     description:
-      "Search U.S. DOE-funded geothermal project datasets via OSTI Data Explorer - this indexes the Geothermal Data Repository (gdr.openei.org): well logs, stimulation and flow-test data, microseismic, DTS, geologic models. THE source for Fervo Cape Station (search 'cape egs' or 'fervo' - note 'cape station' also matches Cape Grim air station), Utah FORGE, and some international geothermal studies. Terms are ANDed. Returns titles, DOIs, dates, and links to the data.",
+      "Search U.S. DOE-funded geothermal datasets: well logs, stimulation and flow-test data, microseismic, DTS, temperature, geologic models. THE source for Fervo Cape Station (search 'cape egs' or 'fervo' - 'cape station' also matches Cape Grim air station), Utah FORGE, Newberry, and some international geothermal studies. Two catalogs: 'osti' (default for text) searches the OSTI Data Explorer index, returning titles, DOIs and links; 'gdr' searches the Geothermal Data Repository's own catalog and returns each dataset's map footprint and direct file download links. Give latitude/longitude to find datasets whose footprint covers a place (uses 'gdr', tightest footprints first). Terms are ANDed.",
     inputSchema: {
-      query: z.string().min(2).describe("Search terms, e.g. 'cape station', 'utah forge stimulation', 'olkaria kenya'."),
+      query: z.string().min(2).optional().describe("Search terms, e.g. 'cape egs', 'utah forge stimulation', 'olkaria kenya'. Optional with latitude/longitude."),
+      latitude: z.number().min(-90).max(90).optional().describe("With longitude: datasets whose footprint overlaps radius_km around this point."),
+      longitude: z.number().min(-180).max(180).optional(),
+      radius_km: z.number().min(0.1).max(500).default(25),
+      catalog: z.enum(["osti", "gdr"]).optional().describe("Force a catalog. Default: gdr for place searches, osti otherwise."),
       rows: z.number().int().min(1).max(50).default(15),
     },
   },
-  async ({ query, rows }) => {
-    const qs = `q=${encodeURIComponent(query)}&rows=${rows}`; // OSTI treats '+' literally; must use %20
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 30_000);
+  async ({ query, latitude, longitude, radius_km, catalog, rows }) => {
+    const spatial = latitude != null && longitude != null;
+    if (!query && !spatial) return err("Provide query, or latitude + longitude.");
+    const useGdr = spatial || catalog === "gdr";
     try {
-      const res = await fetch(`${OSTI_DE}?${qs}`, {
-        signal: ctrl.signal,
-        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-      });
-      if (!res.ok) return err(`OSTI Data Explorer HTTP ${res.status}`);
-      const recs = await res.json();
-      if (!Array.isArray(recs)) return err("Unexpected OSTI response shape.");
-      return json({
-        query,
-        returned: recs.length,
-        datasets: recs.map((r) => ({
-          title: r.title,
-          doi: r.doi ?? null,
-          published: (r.publication_date ?? "").slice(0, 10) || null,
-          authors: (r.authors ?? []).slice(0, 4),
-          researchOrgs: r.research_orgs ?? null,
-          description: (r.description ?? "").slice(0, 400),
-          links: (r.links ?? [])
-            .filter((l) => ["fulltext", "doi"].includes(l.rel))
-            .map((l) => l.href),
-        })),
-      });
+      return json(
+        useGdr
+          ? await searchGdr({ query, latitude, longitude, radiusKm: radius_km, rows })
+          : await searchGeothermalDatasets(query, rows)
+      );
     } catch (e) {
-      return err(`OSTI query failed: ${e.message}`);
-    } finally {
-      clearTimeout(t);
+      return err(`${useGdr ? "GDR catalog" : "OSTI"} query failed: ${e.message}`);
     }
   }
 );
@@ -465,4 +498,4 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`well-data-mcp ready: ${SOURCES.length} sources (${STATE_KEYS.join(", ")})`);
+console.error(`well-data-mcp ready: ${SOURCES.length} sources in ${COUNTRY_KEYS.length} countries (${COUNTRY_KEYS.join(", ")})`);
