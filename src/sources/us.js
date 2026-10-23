@@ -262,14 +262,15 @@ const STATE_SOURCES = [
     label: "Colorado wells (API spots)",
     probe: { operator: "Chevron" },
     agency: "Colorado ECMC (via DNR GIS)",
-    // Field names re-verified against …/MapServer/0?f=json on 2026-09-15 (post ECMC cutover).
-    url: "https://gisdnr.state.co.us/arcgis/rest/services/ECMC_Public/ECMC_Wells/MapServer/0",
+    // Field names re-verified against …/MapServer/0?f=json on 2026-10-23 (layer renamed from
+    // ECMC_Wells to Wells_Public_ECMC; COUNTY became County).
+    url: "https://gisdnr.state.co.us/arcgis/rest/services/ECMC_Public/Wells_Public_ECMC/MapServer/0",
     pageMax: 2000,
     searchFields: {
       api: "API",
       well_name: "WellName",
       operator: "Operator",
-      county: "COUNTY",
+      county: "County",
       field: "field_name",
       status: "wellstat",
       well_type: "well_class",
@@ -281,7 +282,7 @@ const STATE_SOURCES = [
       status: a.wellstat,
       wellType: a.well_class || null,
       field: a.field_name || a.BASIN || null,
-      county: a.COUNTY ?? null,
+      county: a.County ?? null,
       latitude: coord(a, "lat", g, "y"),
       longitude: coord(a, "long", g, "x"),
       spudDate: msToIso(a.spud_date),
@@ -1094,7 +1095,8 @@ const STATE_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.API,
-      wellName: a.DispName,
+      // DispName is 'LEASE  WELLNO ... API'; drop the trailing API number
+      wellName: a.DispName && a.API ? a.DispName.replace(new RegExp(`\\s*${a.API}$`), "") : a.DispName,
       operator: null,
       status: a.statdesc,
       wellType: a.typedesc,
@@ -1199,7 +1201,8 @@ const STATE_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.API_NO,
-      wellName: joinName(a.WELL_NAME, a.WELL_NO),
+      // WELL_NAME already ends with the well number ('ELLISON FRANK     1' + WELL_NO '1')
+      wellName: a.WELL_NAME || joinName(a.LEASE_NAME, a.WELL_NO),
       leaseName: a.LEASE_NAME,
       operator: a.COMPANY_NAME,
       status: a.WELL_STATUS_DESCRIPTION,

@@ -55,18 +55,35 @@ test("CA-OG normalizer emits ISO spudDate", async () => {
   assert.equal(n.spudDate, "1988-02-17");
 });
 
+test("normalizeRecord collapses fixed-width padding in names but keeps the id as stored", async () => {
+  const { SOURCES, normalizeRecord } = await import("../src/sources/index.js");
+  const src = (key) => SOURCES.find((s) => s.key === key);
+  // attributes as the live layers returned them on 2026-10-23
+  const mt = normalizeRecord(src("MT"), { APIWellNumber: "25015050140000", WellName: "NICHOLS       1" }, null);
+  assert.equal(mt.wellName, "NICHOLS 1");
+  const ms = normalizeRecord(src("MS"), { API: "2300120730", DispName: "ANNIE G BARNUM         6 6 2300120730" }, null);
+  assert.equal(ms.wellName, "ANNIE G BARNUM 6 6");
+  const oh = normalizeRecord(src("OH"), { API_NO: "34001200010000", WELL_NAME: "ELLISON FRANK     1", WELL_NO: "1" }, null);
+  assert.equal(oh.wellName, "ELLISON FRANK 1");
+  const uk = normalizeRecord(src("GB-NSTA-OFF"), { WELLREGNO: "15/27-  10" }, null);
+  assert.equal(uk.api, "15/27-  10");
+  const sa = normalizeRecord(src("AU-SA-PET"), { DRILLHOLE_NO: 0, WELL_ID: 4421, WELL_NAME: "Big Lake 185" }, null);
+  assert.equal(sa.api, null); // no drillhole number: not the id '0'
+  assert.equal(sa.wellId, 4421);
+});
+
 test("CO normalizer maps county/field/class/dates/depths from the live ECMC schema", async () => {
   const { SOURCES, normalizeRecord } = await import("../src/sources/index.js");
   const co = SOURCES.find((s) => s.key === "CO");
   assert.deepEqual(
     ["api", "well_name", "operator", "county", "field", "status", "well_type"].map((k) => co.searchFields[k]),
-    ["API", "WellName", "Operator", "COUNTY", "field_name", "wellstat", "well_class"]
+    ["API", "WellName", "Operator", "County", "field_name", "wellstat", "well_class"]
   );
-  // attributes exactly as the live layer returned them on 2026-09-15 (note padded well_class)
+  // attributes exactly as the live layer returned them on 2026-10-23 (note padded well_class)
   const n = normalizeRecord(
     co,
-    { API: "001-05000", WellName: "UPRR-JOLLY 1", Operator: "TOMBERLIN* BILL", wellstat: "PA", BASIN: "Denver (DJ) Basin",
-      COUNTY: "ADAMS", field_name: "WILDCAT", spud_date: -385430400000, max_m_depth: 5404, max_tv_depth: 0,
+    { API: "00105000", WellName: "UPRR-JOLLY 1", Operator: "TOMBERLIN* BILL", wellstat: "PA", BASIN: "Denver (DJ) Basin",
+      County: "ADAMS", field_name: "WILDCAT", spud_date: -385430400000, max_m_depth: 5404, max_tv_depth: 0,
       well_class: "DA                       ", status_date: -384825600000 },
     { x: -104.6, y: 39.9 }
   );

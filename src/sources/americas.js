@@ -16,6 +16,7 @@ function saskatchewan({ key, layer, label, probe, extraCaveat }) {
     agency: "Saskatchewan Ministry of Energy and Resources",
     url: `https://gis.saskatchewan.ca/arcgis/rest/services/Economy/Petroleum/MapServer/${layer}`,
     pageMax: 2000,
+    timeoutMs: 60_000, // a text search that matches nothing scans the whole layer (~40 s)
     idKind: "id",
     idLabel: "wellbore UWI",
     dedupeBy: "WELL_CWI", // one row per wellbore completion
@@ -199,6 +200,7 @@ export const AMERICAS_SOURCES = [
     agency: "Canada-Nova Scotia Offshore Energy Board directory (via NRCan)",
     url: "https://maps-cartes.services.geo.ca/server_serveur/rest/services/NRCan/Nova_Scotia_Offshore_Petroleum_en/MapServer/0",
     pageMax: 2000,
+    timeoutMs: 60_000, // NRCan's server often takes 15-30 s
     idKind: "id",
     idLabel: "well name",
     extent: [-67.0, 41.0, -56.0, 47.5],

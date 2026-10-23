@@ -86,9 +86,13 @@ export const fetchText = (url, opts) => request(url, { ...opts, binary: false })
 /** Same as fetchText, returning a Buffer (zip files). */
 export const fetchBuffer = (url, opts) => request(url, { ...opts, binary: true });
 
-/** fetchText + JSON.parse, with a readable error when a server answers with HTML (firewall, maintenance page). */
+/**
+ * fetchText + JSON.parse, with a readable error when a server answers with HTML (firewall, maintenance page).
+ * `ifEmpty`: what an empty body means, for servers that answer "no results" with nothing at all.
+ */
 export async function fetchJson(url, opts = {}) {
   const text = await fetchText(url, { ...opts, headers: { Accept: "application/json", ...(opts.headers ?? {}) } });
+  if (opts.ifEmpty !== undefined && !text.trim()) return opts.ifEmpty;
   try {
     return JSON.parse(text);
   } catch {

@@ -138,10 +138,17 @@ function trimAttrs(attrs) {
   return out;
 }
 
-/** Normalize one record via its source's field map (trims padded strings first, coerces lat/lon). */
+/**
+ * Normalize one record via its source's field map: trims padded strings first, collapses
+ * the space padding inside fixed-width names ('NICHOLS       1' -> 'NICHOLS 1'; the id is
+ * left exactly as stored so it can be searched again), coerces lat/lon.
+ */
 export function normalizeRecord(source, attrs, geometry) {
   const n = source.normalize(trimAttrs(attrs ?? {}), geometry ?? null);
-  for (const [k, v] of Object.entries(n)) if (v === "") n[k] = null;
+  for (const [k, v] of Object.entries(n)) {
+    if (v === "") n[k] = null;
+    else if (typeof v === "string" && k !== "api") n[k] = v.replace(/\s{2,}/g, " ");
+  }
   n.latitude = num(n.latitude);
   n.longitude = num(n.longitude);
   return n;

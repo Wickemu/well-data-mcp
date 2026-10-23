@@ -1,7 +1,8 @@
 // US federal offshore (Outer Continental Shelf) wells from BOEM/BSEE's ArcGIS layers.
 // The layers store the operator as a 5-digit BOEM company number, so names come from
 // BOEM's company file (CompanyRawData.zip, ~340 KB, refreshed daily), loaded once per
-// process: operator searches match names and results show them.
+// process: operator searches match names and results show them. Only an operator-name
+// search needs that file; other queries wait for it briefly, then show company numbers.
 
 import { fetchBuffer } from "../http.js";
 import { unzipEntry } from "../zip.js";
@@ -28,12 +29,36 @@ async function loadCompanies() {
   return loading;
 }
 
+// How long a query that only needs names for display waits for the company file.
+const NAME_WAIT_MS = 10_000;
+
+/**
+ * Before each query: give the company file a few seconds, then go ahead without it
+ * (operators show as company numbers). A failed download is retried on the next query.
+ */
+async function prepareNames() {
+  if (companies) return;
+  let timer;
+  const wait = new Promise((resolve) => {
+    timer = setTimeout(resolve, NAME_WAIT_MS);
+    timer.unref?.();
+  });
+  await Promise.race([loadCompanies().catch(() => null), wait]);
+  clearTimeout(timer);
+}
+
 /** OPERATOR IN (...) for every BOEM company whose name contains the search words. */
 async function operatorWhere(text) {
-  const map = await loadCompanies();
-  const words = String(text).trim().toUpperCase().split(/\s+/);
+  const t = String(text).trim();
+  if (/^\d{5}$/.test(t)) return `OPERATOR = ${sqlQuote(t)}`;
+  let map;
+  try {
+    map = await loadCompanies();
+  } catch (e) {
+    throw new Error(`BOEM's company list could not be loaded (${e.message}); search by the 5-digit BOEM company number instead`);
+  }
+  const words = t.toUpperCase().split(/\s+/);
   const numbers = [...map].filter(([, name]) => name && words.every((w) => name.toUpperCase().includes(w))).map(([n]) => n);
-  if (/^\d{5}$/.test(String(text).trim())) numbers.push(String(text).trim());
   return numbers.length ? `OPERATOR IN (${numbers.slice(0, 300).map(sqlQuote).join(",")})` : "1=0";
 }
 
@@ -53,7 +78,7 @@ function ocsSource({ key, region, label, url, extent, apiStates, probe }) {
     idKind: "us-api",
     apiStates,
     extent,
-    prepare: loadCompanies,
+    prepare: prepareNames,
     operatorWhere,
     displayOperator: (n) => (companyName(n) ? `${companyName(n)} (${n})` : n),
     caveat:

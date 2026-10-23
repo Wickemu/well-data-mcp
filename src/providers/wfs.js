@@ -113,10 +113,13 @@ async function wfsFetch(source, fetcher, params) {
   }
 }
 
+// MapServer (BRGM) answers a GetFeature that matches nothing with an empty 200 body.
+const fetchFeatureCollection = (url, opts) => fetchJson(url, { ...opts, ifEmpty: { type: "FeatureCollection", features: [] } });
+
 async function getFeatures(source, { conditions = [], box = null, limit, offset = 0 }) {
   const paging = source.noPaging ? { count: String(offset + limit) } : { count: String(limit), startIndex: String(offset) };
   const params = baseParams(source, { ...paging, ...filterParams(source, conditions, box) });
-  const data = await wfsFetch(source, fetchJson, params);
+  const data = await wfsFetch(source, fetchFeatureCollection, params);
   if (!Array.isArray(data.features)) throw new Error(`WFS ${source.typeName}: unexpected response (no features array)`);
   if (source.noPaging) data.features = data.features.slice(offset, offset + limit);
   return data;
@@ -222,7 +225,7 @@ wfsProvider.raw = async function raw(source, { where, outFields = "*", limit, of
   const capped = Math.min(limit, source.pageMax);
   const params = baseParams(source, { count: String(capped), startIndex: String(offset), CQL_FILTER: cql });
   if (outFields !== "*") params.propertyName = outFields;
-  const data = await wfsFetch(source, fetchJson, params);
+  const data = await wfsFetch(source, fetchFeatureCollection, params);
   const total = matched(data);
   return {
     rows: toRows(data.features ?? []),

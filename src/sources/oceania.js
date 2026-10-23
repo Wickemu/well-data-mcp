@@ -36,7 +36,9 @@ function sarig({ key, typeName, label, probe, caveat }) {
       well_type: "WELL_TYPE",
     },
     normalize: (a, g) => ({
-      api: a.DRILLHOLE_NO != null ? String(a.DRILLHOLE_NO) : null,
+      // ~3% of petroleum wells have no drillhole number (stored as 0); WELL_ID is always set.
+      api: a.DRILLHOLE_NO ? String(a.DRILLHOLE_NO) : null,
+      wellId: a.WELL_ID ?? null,
       wellName: a.WELL_NAME,
       operator: a.OPERATOR,
       status: a.STATUS_RIG_RELEASE,
@@ -266,8 +268,8 @@ export const OCEANIA_SOURCES = [
     key: "AU-SA-PET",
     typeName: "drillholes:petroleum_wells",
     label: "South Australia petroleum wells (Cooper/Eromanga...)",
-    probe: { operator: "Santos" },
-    caveat: "Depths in metres. field is the field/prospect name.",
+    probe: { operator: "Delhi" }, // older wells: the layer sorts recent ones (no drillhole number yet) first
+    caveat: "Depths in metres. field is the field/prospect name. About 110 older wells have no drillhole number (id is null; find them by well_name).",
   }),
   sarig({
     key: "AU-SA-GEO",

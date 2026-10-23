@@ -235,11 +235,14 @@ export const arcgisProvider = {
   async distinct(source, fieldKey, text, limit = 200) {
     const field = source.searchFields[fieldKey];
     const { where } = await buildWhere(source, { [fieldKey]: text });
+    // Many servers (ArcGIS Server on an enterprise geodatabase) answer a paged distinct
+    // query with a bare 400 unless it is also ordered, so always order by the field.
     const { features } = await querySource(source, {
       where,
       outFields: field,
       limit: Math.min(source.pageMax, limit),
       distinct: true,
+      orderBy: field,
     });
     // A source whose operator field is a code (BOEM company numbers) shows names instead.
     const show = source.displayOperator;
