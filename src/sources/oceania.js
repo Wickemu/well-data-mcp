@@ -1,7 +1,8 @@
 // New Zealand and Australia. Every endpoint and field name below was verified against
 // a live response on 2026-10-06.
 
-import { msToIso, isoDate, coord, num, geomFirst } from "./normalize.js";
+import { msToIso, isoDate, usDateToIso, coord, num, geomFirst } from "./normalize.js";
+import { fetchJson } from "../http.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
 const AUSTRALIA = [112.0, -45.0, 155.0, -9.0];
@@ -58,7 +59,7 @@ function sarig({ key, typeName, label, probe, caveat }) {
 }
 
 // Queensland's petroleum and coal-seam-gas layers share one schema.
-function queensland({ key, layer, label, probe }) {
+function queensland({ key, layer, label, probe, baseWhere, caveat }) {
   return {
     key,
     country: "AU",
@@ -73,7 +74,8 @@ function queensland({ key, layer, label, probe }) {
     apiNumeric: true,
     extent: [137.9, -29.2, 153.6, -9.0],
     license: "CC BY 4.0",
-    caveat: "Updated nightly. No spud date (rigReleaseDate is the end of drilling). Depths in metres.",
+    ...(baseWhere ? { baseWhere } : {}),
+    caveat: caveat ?? "Updated nightly. No spud date (rigReleaseDate is the end of drilling). Depths in metres.",
     searchFields: {
       api: "bore_no",
       well_name: "bore_name",
@@ -97,6 +99,95 @@ function queensland({ key, layer, label, probe }) {
       dataUrl: a.qdex_data_link,
     }),
   };
+}
+
+// Victoria's DbMap uses 1899-12-30 for "no date" (real spud dates go back to 1886).
+const after1900 = (v) => {
+  const d = isoDate(v);
+  return d && d !== "1899-12-30" ? d : null;
+};
+
+// GSNSW's drillhole layers share one schema (petroleum/CSG wells, and all drillholes).
+function nswDrillholes({ key, typeName, baseCql, label, probe, caveat }) {
+  return {
+    key,
+    country: "AU",
+    state: "NSW",
+    kind: "wfs",
+    label,
+    probe,
+    agency: "Geological Survey of New South Wales",
+    url: "https://public-gs.geoscience.nsw.gov.au/geoserver/ows",
+    typeName,
+    geometryName: "geom",
+    sortBy: "gsnsw_drill_id",
+    ...(baseCql ? { baseCql } : {}),
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "GSNSW drillhole id (e.g. 'PET_000001')",
+    extent: [140.9, -37.6, 153.7, -28.1],
+    license: "CC BY 4.0",
+    caveat,
+    searchFields: {
+      api: "gsnsw_drill_id",
+      well_name: "hole_name",
+      operator: "licence_holder",
+      county: "title",
+      status: "well_status",
+      well_type: "business_purpose",
+    },
+    normalize: (a, g) => ({
+      api: a.gsnsw_drill_id,
+      wellName: a.hole_name,
+      alias: a.alternate_name,
+      operator: a.operator || a.licence_holder,
+      licenceHolder: a.licence_holder,
+      status: a.well_status,
+      wellType: a.business_purpose,
+      purpose: a.hole_purpose,
+      county: a.title,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      drillYear: a.year_drilled ?? null,
+      depthMD: nz(a.end_depth),
+      depthUnit: "m",
+      topStratigraphy: a.top_stratigraphy,
+      baseStratigraphy: a.base_stratigraphy,
+    }),
+  };
+}
+
+// The Northern Territory's STRIKE map serves its petroleum wells only through WMS
+// GetFeatureInfo: a one-pixel request over the whole territory returns every well.
+// Blank values arrive as the string 'Null'; '&' arrives escaped (sometimes twice).
+const ntText = (v) => (v == null || v === "Null" ? null : String(v).replace(/&(amp;)+/g, "&"));
+async function loadNorthernTerritory() {
+  const data = await fetchJson("https://strike.nt.gov.au/wms", {
+    params: {
+      service: "WMS",
+      version: "1.1.1",
+      request: "GetFeatureInfo",
+      layers: "Petroleum Wells",
+      query_layers: "Petroleum Wells",
+      styles: "",
+      srs: "EPSG:4326",
+      bbox: "110,-30,145,0",
+      width: "1",
+      height: "1",
+      x: "0",
+      y: "0",
+      info_format: "application/geojson",
+      feature_count: "100000",
+      format: "image/png",
+    },
+    timeoutMs: 60_000,
+  });
+  return (data.features ?? []).map((f) => {
+    const attrs = Object.fromEntries(Object.entries(f.properties ?? {}).map(([k, v]) => [k, ntText(v)]));
+    const x = Number(attrs.LONGITUDE);
+    const y = Number(attrs.LATITUDE);
+    return { attrs, geometry: Number.isFinite(x) && Number.isFinite(y) && (x || y) ? { x, y } : null };
+  });
 }
 
 export const OCEANIA_SOURCES = [
@@ -290,6 +381,209 @@ export const OCEANIA_SOURCES = [
     label: "Queensland coal-seam-gas wells",
     probe: { well_name: "Broadmeadow" },
   }),
+  queensland({
+    key: "AU-QLD-GEO",
+    layer: 9,
+    label: "Queensland geothermal heat-flow bores",
+    probe: { well_name: "Georgetown" },
+    baseWhere: "bore_subtype = 'GEOTHERMAL HEAT FLOW BORE'",
+    caveat: "The Geological Survey of Queensland's heat-flow bores (2010-2011, 70-320 m deep), from its stratigraphic-bores layer. Depths in metres.",
+  }),
+  {
+    key: "AU-VIC",
+    country: "AU",
+    state: "VIC",
+    kind: "wfs",
+    label: "Victoria petroleum and geothermal wells (onshore and offshore: Gippsland, Otway, Bass)",
+    probe: { operator: "Esso" },
+    agency: "Geological Survey of Victoria (DbMap petroleum well database), Department of Energy, Environment and Climate Action",
+    url: "https://opendata.maps.vic.gov.au/geoserver/wfs",
+    typeName: "open-data-platform:pet_wells",
+    geometryName: "geom",
+    sortBy: "uwi",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "UWI",
+    extent: [[140.9, -39.9, 150.1, -33.9], [143.0, -41.5, 149.0, -38.0]],
+    license: "CC BY 4.0",
+    caveat:
+      "~1,600 wells, actively maintained, incl. Gippsland and Otway offshore and ~40 geothermal wells (type GT_WILDCAT); a few Bass Strait wells off SA, Tasmania and NSW too. status codes: P&A, PRODUCER, SUS...; type codes: D_HC_PROD, E_WILDCAT, E_APPRAISAL, GT_WILDCAT... field is the basin, county the title (lease). Depths in metres.",
+    searchFields: {
+      api: "uwi",
+      well_name: "well_name",
+      operator: "operator",
+      county: "lease_name",
+      field: "basin",
+      status: "current_status",
+      well_type: "current_class",
+    },
+    normalize: (a, g) => ({
+      api: a.uwi,
+      wellName: [a.well_name, a.well_number].filter(Boolean).join(" ") || null,
+      operator: a.operator,
+      status: a.current_status,
+      wellType: a.current_class,
+      result: a.symbol_desc,
+      field: a.basin,
+      county: a.lease_name,
+      onshore: a.onshore_ind === "Y",
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: after1900(a.spud_date),
+      rigReleaseDate: after1900(a.rig_release_date),
+      depthMD: nz(a.drill_td) ?? nz(a.final_td),
+      depthTVD: nz(a.max_tvd),
+      depthUnit: "m",
+      kbElevationM: nz(a.kb_elev),
+      waterDepthM: nz(a.abswaterdepth),
+    }),
+  },
+  nswDrillholes({
+    key: "AU-NSW",
+    typeName: "drilling:drilling_drillholes_petroleum",
+    label: "New South Wales petroleum and coal-seam-gas wells",
+    probe: { operator: "Santos" },
+    caveat:
+      "~1,200 wells: ~900 coal-seam methane wells and the conventional petroleum and stratigraphic wells. operator is the licence holder where no operator is recorded. Year drilled only (no spud date). county is the petroleum title. Depths in metres.",
+  }),
+  nswDrillholes({
+    key: "AU-NSW-GEO",
+    typeName: "drilling:drilling_drillholes",
+    baseCql: "project = 'GTHM'",
+    label: "New South Wales geothermal drillholes",
+    probe: { well_name: "Geothermal" },
+    caveat: "The ~20 geothermal exploration holes (Bulga, Bulli...) in GSNSW's drillhole database. Year drilled only. Depths in metres.",
+  }),
+  {
+    key: "AU-NT",
+    country: "AU",
+    state: "NT",
+    kind: "snapshot",
+    via: "STRIKE WMS (whole layer)",
+    label: "Northern Territory petroleum wells (Amadeus, Beetaloo, McArthur, Georgina...)",
+    probe: { operator: "Santos" },
+    agency: "Northern Territory Geological Survey (STRIKE)",
+    url: "https://strike.nt.gov.au/wms",
+    load: loadNorthernTerritory,
+    pageMax: 1000,
+    idKind: "id",
+    idLabel: "well name (e.g. 'Shenandoah 1')",
+    extent: [128.9, -26.1, 138.1, -10.9],
+    license: "CC BY 4.0",
+    caveat:
+      "All ~300 petroleum wells, current (2026 spuds included). type is the purpose (Exploration, Development, Appraisal), field the basin, county the title. depthMD is the measured total depth (m). eno is Geoscience Australia's number (AU-GA). reportSearchUrl searches the well's reports in GEMIS.",
+    searchFields: {
+      api: "WELLNAME",
+      well_name: "WELLNAME",
+      operator: "OPERATOR",
+      county: "TITLE_ID",
+      field: "BASIN",
+      status: "STATUS",
+      well_type: "PURPOSE",
+    },
+    normalize: (a, g) => ({
+      api: a.WELLNAME,
+      eno: a.ENO,
+      wellName: a.WELLNAME,
+      alias: a.WELL_ALIAS,
+      operator: a.OPERATOR,
+      status: a.STATUS,
+      wellType: a.PURPOSE,
+      classification: a.CLASS_POST,
+      shows: a.HCSHOWS,
+      field: a.BASIN,
+      county: a.TITLE_ID,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: usDateToIso(a.DT_SPUD),
+      rigReleaseDate: usDateToIso(a.DT_RELEASE),
+      depthMD: nz(a.TOTAL_MEAS),
+      depthUnit: "m",
+      reportSearchUrl: a.HANDLE_URL,
+    }),
+  },
+  {
+    key: "AU-TAS",
+    country: "AU",
+    state: "TAS",
+    label: "Tasmania fuel (petroleum, coal, oil shale) and geothermal boreholes",
+    probe: { operator: "Esso" },
+    agency: "Mineral Resources Tasmania",
+    url: "https://data.stategrowth.tas.gov.au/ags/rest/services/MRT/Boreholes_and_Traces/MapServer/0",
+    baseWhere: "PURPOSE LIKE '%Fuels%' OR PURPOSE LIKE '%Geothermal%'",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "MRT drill id",
+    apiNumeric: true,
+    extent: [[143.5, -44.0, 148.6, -39.4], [143.0, -41.5, 149.0, -38.0]],
+    license: "CC BY 4.0 (Mineral Resources Tasmania)",
+    caveat:
+      "The ~1,700 boreholes MRT classes as fuels (coal, oil shale and petroleum, incl. the Bass and Sorell offshore wells - the ~50 deeper than 1,000 m are essentially the petroleum wells) or geothermal (~45). operator is the drilling company; county searches the locality keywords. No status. Depths (hole length) in metres. detailUrl opens MRT's drilling record.",
+    searchFields: { api: "DRILL_ID", well_name: "NAME", operator: "COMPANY", county: "KEYWORDS", well_type: "PURPOSE" },
+    normalize: (a, g) => ({
+      api: a.DRILL_ID != null ? String(a.DRILL_ID) : null,
+      wellName: a.NAME,
+      operator: a.COMPANY,
+      status: null,
+      wellType: a.PURPOSE,
+      drillType: a.DRILL_TYPE,
+      county: a.KEYWORDS?.trim() || null,
+      tenements: a.ASSOCIATED_TENEMENTS,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: msToIso(a.DATE_DRILLED),
+      depthMD: nz(a.LENGTH),
+      depthUnit: "m",
+      reports: a.RELATED_REPORTS,
+      detailUrl: a.DETAILS,
+    }),
+  },
+  {
+    key: "AU-OFF",
+    country: "AU",
+    state: null,
+    label: "Australia offshore petroleum wells and boreholes (NOPTA titles register)",
+    probe: { well_name: "Pluto" },
+    agency: "National Offshore Petroleum Titles Administrator (NOPTA)",
+    url: "https://arcgis.nopta.gov.au/arcgis/rest/services/Public/Petroleum_Wells/MapServer/0",
+    pageMax: 8000,
+    idKind: "id",
+    idLabel: "UWI (Geoscience Australia ENO, e.g. 'ENO0595735')",
+    extent: [105.0, -48.0, 160.0, -8.0],
+    license: "CC BY 4.0",
+    caveat:
+      "One record per borehole (~8,000; sidetracks separate, boreholeId), incl. ~4,000 legacy onshore records. Adds what AU-GA lacks: operator, title, rig and spud (kick-off) date. type is the purpose (Exploration, Development, Appraisal), wellCategory Petroleum, Stratigraphic or Greenhouse Gas; field is the basin, county the adjacent state. No depth or status. Wells appear once their basic data is released.",
+    searchFields: {
+      api: "Uwi",
+      well_name: "WellName",
+      operator: "Operator",
+      county: "OffshoreArea",
+      field: "Basin",
+      well_type: "Purpose",
+    },
+    normalize: (a, g) => ({
+      api: a.Uwi,
+      boreholeId: a.Ubhi,
+      wellName: a.WellName,
+      boreholeName: a.BHName,
+      operator: a.Operator,
+      status: null,
+      wellType: a.Purpose,
+      wellCategory: a.Type,
+      field: a.Basin,
+      subBasin: a.SubBasin,
+      county: a.OffshoreArea,
+      jurisdiction: a.Jurisdiction,
+      offshore: a.IsOffshore === "Yes",
+      title: a.TitleNumber,
+      ...geomFirst(a, g, "Latitude", "Longitude"),
+      spudDate: msToIso(a.KickOffDate),
+      rigReleaseDate: msToIso(a.RigReleaseDate),
+      dataReleaseDate: msToIso(a.BasicReleaseDate),
+      rig: a.Rig,
+      rigContractor: a.RigContractor,
+    }),
+  },
   {
     key: "AU-WA",
     country: "AU",

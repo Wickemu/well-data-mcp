@@ -143,6 +143,7 @@ export function nearParams(latitude, longitude, radiusMeters) {
 //   apiNumeric     the api field is a number, so match it with '=' not UPPER/LIKE
 //   apiDigits14    with apiNumeric: every API is stored as a 14-digit number
 //   dedupeBy       attribute that identifies a well when a layer repeats rows
+//   orderBy        sort for every query (with dedupeBy: which repeated row is kept, e.g. the latest)
 //   prepare()      async; loads lookup tables the normalizer needs (called before each query)
 //   operatorWhere(text)  async; custom SQL for the operator filter (e.g. names -> company numbers)
 
@@ -176,6 +177,7 @@ async function querySource(source, opts) {
   try {
     result = await queryLayer(source.url, {
       outFields: source.outFields ?? "*",
+      orderBy: source.orderBy ?? null,
       ...opts,
       noReproject: source.noReproject,
       noPaging: source.noPaging,

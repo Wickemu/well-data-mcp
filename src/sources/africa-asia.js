@@ -1,10 +1,23 @@
-// Africa and Asia. Every endpoint and field name below was verified against a live
+// Africa, Asia and the Middle East. Every endpoint and field name below was verified against a live
 // response on 2026-10-06. None of these agencies states a licence: query live, don't
 // republish extracts.
 
-import { msToIso, dmyToIso, num, looseNum, geomFirst } from "./normalize.js";
+import { msToIso, dmyToIso, namedDateToIso, num, looseNum, geomFirst } from "./normalize.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
+
+// Dates some layers carry as garbage far in the future (Thailand has spud years ~6984).
+const plausibleDate = (v) => {
+  const d = msToIso(v);
+  return d && d <= String(new Date().getFullYear() + 1) ? d : null;
+};
+
+// Tanzania mixes Excel serial dates ('27076'), DD/MM/YYYY and bare years.
+const excelOrDmy = (v) => {
+  const t = String(v ?? "").trim();
+  if (/^\d{5}$/.test(t)) return msToIso((Number(t) - 25569) * 86_400_000);
+  return dmyToIso(t);
+};
 
 export const AFRICA_ASIA_SOURCES = [
   {
@@ -157,6 +170,223 @@ export const AFRICA_ASIA_SOURCES = [
       waterDepth: looseNum(a.WaterDepth),
       rig: a.Rig_Name,
       comment: a.COMMENT,
+    }),
+  },
+  // ------------------------------------------------- added 2026-10-23
+  {
+    key: "TH-DMF",
+    country: "TH",
+    state: null,
+    label: "Thailand oil & gas wells, onshore and Gulf of Thailand (2003 to date)",
+    probe: { operator: "Valeura" },
+    agency: "Department of Mineral Fuels (DMF), Ministry of Energy, Thailand",
+    url: "https://gis.dmf.go.th/arcgis/rest/services/DMF/DMF_Operation_Dashboard/MapServer/6",
+    pageMax: 2000,
+    dedupeBy: "WELL_NAME", // a monthly drilling log: one row per well per month while it is drilled
+    orderBy: "YEAR DESC, MONTH DESC",
+    idKind: "id",
+    idLabel: "well name (e.g. 'Kaphong J-03')",
+    extent: [97.3, 5.5, 105.7, 20.5],
+    caveat:
+      "DMF's monthly drilling log since 2003 (~13,700 wells, current to the latest month): one record per well, its latest month. status is the result (Oil, Gas, Dry, P&A...; drillingState is Drilling while active), type DEV / APP / EXP. field is the concession block. Depths in metres. Search Latin-script names; Thai-script values do not match.",
+    searchFields: { api: "WELL_NAME", well_name: "WELL_NAME", operator: "OPERATOR", field: "BLOCK", status: "RESULT", well_type: "WELL_TYPE" },
+    normalize: (a, g) => ({
+      api: a.WELL_NAME,
+      wellName: a.WELL_NAME,
+      operator: a.OPERATOR,
+      status: a.RESULT,
+      drillingState: a.SYMBOL,
+      wellType: a.WELL_TYPE,
+      field: a.BLOCK,
+      environment: a["DMFGIS.Well_NEW.AREA"] ?? a.AREA ?? null,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: plausibleDate(a.SPUD_DATE),
+      tdDate: plausibleDate(a.TD_DATE),
+      depthMD: nz(a.MD__M__),
+      depthTVD: nz(a.TVD__M__),
+      depthUnit: "m",
+      rig: a.RIG,
+      reportMonth: a.YEAR && a.MONTH ? `${a.YEAR - 543}-${String(a.MONTH).padStart(2, "0")}` : null,
+    }),
+  },
+  {
+    key: "IL-GII",
+    country: "IL",
+    state: null,
+    label: "Israel oil & gas wells, onshore and offshore (2015 snapshot)",
+    probe: { well_name: "Tamar" },
+    agency: "Geophysical Institute of Israel - National Geophysical Data-Base",
+    url: "https://services2.arcgis.com/6ByCdz8rvMt1m9hg/arcgis/rest/services/Oil_Gas_Wells_ITM_29_10_2015/FeatureServer/0",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "well number",
+    extent: [32.0, 29.4, 35.95, 33.4],
+    caveat:
+      "A snapshot of October 2015: ~550 onshore and offshore wells (Tamar, Leviathan, Heletz...). No operator or field. wellType is the database's code for target and result as published (e.g. G-GW, O-DH). Depths in metres; waterDepthM for offshore wells.",
+    searchFields: { api: "WellNo", well_name: "Name", well_type: "Type" },
+    normalize: (a, g) => ({
+      api: a.WellNo,
+      wellName: a.Name,
+      operator: null,
+      status: null,
+      wellType: a.Type,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: msToIso(a.SpudDate),
+      completionDate: msToIso(a.CompDate),
+      depthMD: nz(a.TD),
+      depthUnit: "m",
+      waterDepthM: a.WD ? Math.abs(a.WD) : null,
+      ageAtTD: a.AgeTD,
+    }),
+  },
+  {
+    key: "JO-MEMR",
+    country: "JO",
+    state: null,
+    label: "Jordan petroleum wells",
+    probe: { county: "Risha" },
+    agency: "Ministry of Energy and Mineral Resources of Jordan (petroleum opportunities map)",
+    url: "https://services7.arcgis.com/NkrZE0oq3mYEhCdR/arcgis/rest/services/Petrolum_Oppotrunities_MEMR/FeatureServer/0",
+    pageMax: 1000,
+    idKind: "id",
+    idLabel: "short well name (e.g. 'AD-1')",
+    extent: [34.9, 29.1, 39.4, 33.4],
+    caveat:
+      "~140 exploration and appraisal wells (CGG compilation, 2016). county is the contract area (Risha, Azraq, Sirhan...). status is the shows (Dry, Gas, Oil shows...). Operator is often blank. Depths in metres.",
+    searchFields: { api: "short_well_name", well_name: "Full_well_name", operator: "Company", county: "Contract_Area", status: "SHOWS" },
+    normalize: (a, g) => ({
+      api: a.short_well_name,
+      wellName: a.Full_well_name,
+      operator: a.Company,
+      status: a.SHOWS,
+      county: a.Contract_Area,
+      ...geomFirst(a, g, "Latitude", "Longitude"),
+      spudDate: namedDateToIso(String(a.Spud_Date ?? "").replace(/(\d)(st|nd|rd|th)\b/, "$1")),
+      drillYear: Number(/\b(19|20)\d\d\b/.exec(a.Spud_Date ?? "")?.[0]) || null,
+      depthMD: nz(a.TD_m_MD),
+      depthUnit: "m",
+      formationAtTD: a.Formation,
+      objective: a.Objective,
+    }),
+  },
+  {
+    key: "AO-ANPG",
+    country: "AO",
+    state: null,
+    label: "Angola oil & gas wells, onshore and offshore",
+    probe: { well_name: "Dalia" },
+    agency: "ANPG - Agência Nacional de Petróleo, Gás e Biocombustíveis (Angola)",
+    url: "https://gis.anpg.co.ao/hosting/rest/services/Hosted/AGO_Wells/FeatureServer/0",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "short name (e.g. 'CC-09')",
+    extent: [8.5, -18.1, 24.1, -4.3],
+    caveat:
+      "~3,500 wells, onshore Kwanza and Congo basins and deepwater blocks; the newest spud dates are around 2016, so recent wells are missing. field is a coded field name (17_DALIA = Block 17, Dália), county the province. No depth or well type.",
+    searchFields: { api: "short_name", well_name: "well_name", operator: "operator", county: "province", field: "field", status: "current_st" },
+    normalize: (a, g) => ({
+      api: a.short_name,
+      wellName: a.well_name,
+      operator: a.operator,
+      status: a.current_st?.trim() || null,
+      field: a.field,
+      block: a.block,
+      county: a.province,
+      latitude: g?.y ?? null, // lat_dc / long_dc are swapped in the source
+      longitude: g?.x ?? null,
+      spudDate: msToIso(a.spud_date),
+    }),
+  },
+  {
+    key: "TZ-PURA",
+    country: "TZ",
+    state: null,
+    label: "Tanzania petroleum wells (statutory Petroleum Activity Reference Map)",
+    probe: { well_name: "Songo" },
+    agency: "Petroleum Upstream Regulatory Authority (PURA), Tanzania",
+    url: "https://services6.arcgis.com/8RkuyaahJfr9evxe/arcgis/rest/services/Tanzania_Petroleum_Activity_Reference_Map_WFL1/FeatureServer/4",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "well name",
+    extent: [29.3, -11.8, 41.5, -0.9],
+    caveat:
+      "~90 exploration and appraisal wells onshore and offshore (Songo Songo, Mnazi Bay, the deepwater gas discoveries). county is the contract area; shows the hydrocarbons found. Operator is mostly blank. Depths in metres.",
+    searchFields: { api: "NAME", well_name: "NAME", county: "CONTRACT", status: "STATUS", well_type: "WELL_TYPE" },
+    normalize: (a, g) => ({
+      api: a.NAME,
+      wellName: a.NAME,
+      operator: a.OPERATOR?.trim() || null,
+      status: a.STATUS,
+      wellType: a.WELL_TYPE,
+      shows: a.HC_PRESENT,
+      county: a.CONTRACT,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: excelOrDmy(a.SPUD_DATE),
+      completionDate: excelOrDmy(a.COMPL_DATE),
+      depthMD: nz(a.TD_m),
+      depthUnit: "m",
+      formationAtTD: a.FORMATION,
+      rig: a.RIG_NAME,
+    }),
+  },
+  {
+    key: "GQ-MMH",
+    country: "GQ",
+    state: null,
+    label: "Equatorial Guinea petroleum wells (licensing-round map)",
+    probe: { well_name: "Alba" },
+    agency: "Ministry of Hydrocarbons of Equatorial Guinea (EG Ronda map, hosted by Perceptum)",
+    url: "https://services8.arcgis.com/P8e9VWKMOZOXB4PX/arcgis/rest/services/EG_Wells_2024/FeatureServer/0",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "well name (e.g. '10A-1X')",
+    extent: [5.5, -1.5, 11.4, 4.0],
+    caveat:
+      "~180 wells (2024 map): operator is the company that drilled; field is the basin; dataPackage names the block or field data package. Year drilled only. Depths in metres (0 = not reported).",
+    searchFields: { api: "Well_Name", well_name: "Well_Name", operator: "Drilled_by", field: "Basin", status: "Status", well_type: "Type" },
+    normalize: (a, g) => ({
+      api: a.Well_Name,
+      wellName: a.Well_Name,
+      operator: a.Drilled_by,
+      status: a.Status,
+      wellType: a.Type,
+      result: a.Symbology,
+      field: a.Basin,
+      dataPackage: a.Available,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      drillYear: Number(a.Year) || null,
+      depthMD: nz(a.TD_m),
+      depthTVD: nz(a.TVD_m),
+      depthUnit: "m",
+      waterDepthM: nz(a.Water_Depth_m),
+    }),
+  },
+  {
+    key: "SL-PDSL",
+    country: "SL",
+    state: null,
+    label: "Sierra Leone offshore wells",
+    probe: { well_name: "A-1" },
+    agency: "Petroleum Directorate of Sierra Leone (PDSL) data portal",
+    url: "https://services1.arcgis.com/IB7Kf2F8K18M2LKr/arcgis/rest/services/PDSL_WebPortal/FeatureServer/0",
+    pageMax: 1000,
+    idKind: "id",
+    idLabel: "well name",
+    extent: [-15.5, 5.5, -10.2, 10.0],
+    caveat: "The 8 offshore wells drilled (1982-2013): name, year and result only.",
+    searchFields: { api: "wellname", well_name: "wellname", status: "symbology" },
+    normalize: (a, g) => ({
+      api: a.wellname,
+      wellName: a.wellname,
+      operator: null,
+      status: a.symbology,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      drillYear: a.year ?? null,
     }),
   },
 ];
