@@ -543,6 +543,7 @@ export const EUROPE_SOURCES = [
     url: "https://sgi2.isprambiente.it/arcgis/rest/services/servizi/SondaggiEsplorativi/MapServer/1",
     pageMax: 1000,
     noPaging: true, // resultOffset/resultRecordCount are ignored
+    nearAsEnvelope: true, // a point query's distance is ignored (ArcGIS 10.21)
     idKind: "id",
     idLabel: "well name (e.g. 'MALOSSA 001')",
     extent: [6.6, 35.4, 18.6, 47.1],
@@ -574,6 +575,7 @@ export const EUROPE_SOURCES = [
     url: "https://sgi2.isprambiente.it/arcgis/rest/services/servizi/SondaggiEsplorativi/MapServer/2",
     pageMax: 1000,
     noPaging: true,
+    nearAsEnvelope: true,
     idKind: "id",
     idLabel: "well name (e.g. 'ABBADIA 2')",
     extent: [6.6, 35.4, 18.6, 47.1],

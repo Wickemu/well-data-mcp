@@ -132,7 +132,7 @@ const stateArg = z
   .enum(STATE_KEYS)
   .optional()
   .describe(
-    "State / province / region code within the country: US postal codes (CA, UT, TX...) and OCS-GOM / OCS-PAC / OCS-AK / OCS-ATL for federal offshore, Canadian provinces (BC, SK, ON...), Australian states (SA, QLD, WA), NZ regions (WKO, BOP). WA alone matches both Washington and Western Australia; add country to pick one."
+    "State / province / region code within the country: US postal codes (CA, UT, TX...) and OCS-GOM / OCS-PAC / OCS-AK / OCS-ATL for federal offshore, Canadian provinces (AB, BC, SK, MB, ON, QC, NB, NS...), Australian states (QLD, NSW, VIC, TAS, SA, WA, NT), NZ regions (WKO, BOP). WA alone matches both Washington and Western Australia; add country to pick one. Nationwide US datasets (FracFocus, orphaned wells, BLM) have no state: use country=US or source."
   );
 const sourceArg = z.enum(SOURCE_KEYS).optional().describe("Exact source key from list_sources (e.g. CA-GEO). Overrides country/state.");
 

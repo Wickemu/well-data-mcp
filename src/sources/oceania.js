@@ -592,6 +592,8 @@ export const OCEANIA_SOURCES = [
     probe: { county: "Perth" },
     agency: "WA Department of Energy, Mines, Industry Regulation and Safety (DMIRS-025)",
     url: "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Industry_and_Mining/MapServer/13",
+    // The same layer on SLIP's twin service; on 2026-10-23 the first one answered every query with a 503.
+    fallbackUrl: "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Industry_and_Mining_WFS/MapServer/13",
     pageMax: 2000,
     idKind: "id",
     idLabel: "UWI",

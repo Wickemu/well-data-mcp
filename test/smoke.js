@@ -7,7 +7,8 @@
 //   id      - get_well's findById finds that record again by its identifier
 //             (US API numbers are re-looked-up with dashes stripped, which proves
 //             the dash-tolerant match against sources that store dashed numbers)
-//   near    - a 2 km radius search around that record's coordinates finds it
+//   near    - a 2 km radius search centred ~550 m north of that record finds it (off-centre,
+//             so a server that ignores the distance and matches only the exact point fails)
 import { SOURCES, normalizeRecord } from "../src/sources/index.js";
 import { providerFor } from "../src/providers/index.js";
 import { searchGeothermalDatasets } from "../src/osti.js";
@@ -74,10 +75,10 @@ async function runChecks(s, line) {
 
   if (s.noNear) return;
   if (Number.isFinite(sample.latitude) && Number.isFinite(sample.longitude)) {
-    const near = { latitude: sample.latitude, longitude: sample.longitude, radiusKm: 2 };
+    const near = { latitude: sample.latitude + 0.005, longitude: sample.longitude, radiusKm: 2 };
     try {
       const [{ rows }, ms] = await timed(() => provider.search(s, {}, { limit: 10, near }));
-      line(rows.length > 0, s.key, "near", `${rows.length} record(s) within 2 km of the sample (${ms}ms)`);
+      line(rows.length > 0, s.key, "near", `${rows.length} record(s) within 2 km of a point 550 m from the sample (${ms}ms)`);
     } catch (e) {
       line(false, s.key, "near", e.message);
     }

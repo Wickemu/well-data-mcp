@@ -280,3 +280,68 @@ test("fracFocusApi: the 14 or 10 digits FracFocus accepts, from any API format",
   assert.equal(fracFocusApi("423174023700"), "4231740237"); // API-12: drop the sidetrack digits
   assert.equal(fracFocusApi("31740237"), null); // county + sequence only
 });
+
+test("localMidnightToIso: local midnight stored as UTC rounds to the right day; placeholders drop", async () => {
+  const { localMidnightToIso } = await import("../src/sources/normalize.js");
+  assert.equal(localMidnightToIso("2006-01-27T03:00:00.761Z"), "2006-01-27"); // Neuquén, UTC-3
+  assert.equal(localMidnightToIso(-1460491200000), "1923-09-21"); // Bolivia, UTC-4 (04:00Z)
+  assert.equal(localMidnightToIso(Date.UTC(2999, 11, 31)), null); // planned-well placeholder
+  assert.equal(localMidnightToIso(null), null);
+});
+
+test("numericApiClauses width14: 10/12/14-digit APIs match a 14-digit integer field", async () => {
+  const { numericApiClauses } = await import("../src/providers/arcgis.js");
+  assert.deepEqual(numericApiClauses("f", "01-003-01005", true), ["f = 1003010050000"]);
+  assert.deepEqual(numericApiClauses("f", "37003004340001", true), ["f = 37003004340001", "f = 37003004340000"]);
+  assert.deepEqual(numericApiClauses("f", "3700300434"), ["f = 3700300434"]); // default: as stored
+});
+
+test("envelopeParams: the circle's bounding box for servers that ignore distance", async () => {
+  const { envelopeParams } = await import("../src/providers/arcgis.js");
+  const p = envelopeParams(43.24, 10.88, 5000);
+  const g = JSON.parse(p.geometry);
+  assert.equal(p.geometryType, "esriGeometryEnvelope");
+  assert.ok(g.xmin < 10.88 && g.xmax > 10.88 && g.ymin < 43.24 && g.ymax > 43.24);
+  assert.ok(Math.abs(g.ymax - 43.24 - 5000 / 111_320) < 1e-9);
+});
+
+test("utmToLatLon inverts UTM (checked against agency lat/lon)", async () => {
+  const { utmToLatLon } = await import("../src/geo.js");
+  const ns = utmToLatLon(640456, 5107451, 20); // Nova Scotia P-1, zone 20N
+  assert.ok(Math.abs(ns.latitude - 46.10618) < 1e-4 && Math.abs(ns.longitude - -61.18259) < 1e-4);
+  const bo = utmToLatLon(359818.0027, 7486514.0074, 20, true); // Bolivia BERMEJO-X2, zone 20S
+  assert.ok(Math.abs(bo.latitude - -22.72286) < 1e-5 && Math.abs(bo.longitude - -64.36501) < 1e-5);
+});
+
+test("readDbf reads character, numeric and date fields and skips deleted rows", async () => {
+  const { readDbf } = await import("../src/dbf.js");
+  const fields = [["NAME", "C", 10], ["LICENCE", "N", 6], ["STATUS_DAT", "D", 8]];
+  const headerLen = 32 + fields.length * 32 + 1;
+  const recordLen = 1 + fields.reduce((n, f) => n + f[2], 0);
+  const rows = [[" ", "Tundra 1", "905", "19550816"], ["*", "gone", "1", "20000101"], [" ", "Melita", "12324", ""]];
+  const buf = Buffer.alloc(headerLen + rows.length * recordLen + 1, 0x20);
+  buf.writeUInt8(3, 0);
+  buf.writeUInt32LE(rows.length, 4);
+  buf.writeUInt16LE(headerLen, 8);
+  buf.writeUInt16LE(recordLen, 10);
+  fields.forEach(([name, type, len], i) => {
+    const p = 32 + i * 32;
+    buf.fill(0, p, p + 32);
+    buf.write(name, p, "latin1");
+    buf.write(type, p + 11, "latin1");
+    buf.writeUInt8(len, p + 16);
+  });
+  buf.writeUInt8(0x0d, headerLen - 1);
+  rows.forEach((r, i) => {
+    let p = headerLen + i * recordLen;
+    buf.write(r[0], p++, "latin1");
+    fields.forEach(([, , len], j) => {
+      buf.write(r[j + 1].padEnd(len), p, "latin1");
+      p += len;
+    });
+  });
+  assert.deepEqual(readDbf(buf), [
+    { NAME: "Tundra 1", LICENCE: 905, STATUS_DAT: "1955-08-16" },
+    { NAME: "Melita", LICENCE: 12324, STATUS_DAT: null },
+  ]);
+});

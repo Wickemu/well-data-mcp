@@ -1,7 +1,7 @@
 {
   "name": "well-data-mcp",
-  "version": "0.2.0",
-  "description": "Keyless MCP server for oil & gas and geothermal well data worldwide: live regulator and geological-survey services (ArcGIS, WFS) for 34 US states and federal offshore, Canada, Latin America, Europe, Africa, Asia and Oceania, plus DOE geothermal datasets (OSTI, GDR), the bundled IHFC Global Heat Flow Database and Global Energy Monitor trackers",
+  "version": "0.3.0",
+  "description": "Keyless MCP server for oil & gas and geothermal well data worldwide: 160 live regulator and geological-survey services (ArcGIS, WFS, APIs) covering 38 US states and federal offshore, all of Canada but PEI and Nunavut, Latin America, Europe, Africa, the Middle East, Asia and Oceania, plus FracFocus frac-job disclosures, state borehole-temperature and orphaned-well datasets, DOE geothermal datasets (OSTI, GDR), the bundled IHFC Global Heat Flow Database and Global Energy Monitor trackers",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -20,7 +20,11 @@
     "sodir",
     "global-energy-monitor",
     "gdr",
-    "heat-flow"
+    "heat-flow",
+    "fracfocus",
+    "borehole-temperature",
+    "orphaned-wells",
+    "swisstopo"
   ],
   "type": "module",
   "main": "src/index.js",

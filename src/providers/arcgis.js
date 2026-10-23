@@ -4,6 +4,7 @@
 
 import { fetchJson } from "../http.js";
 import { apiCountySequence, apiDashed } from "../api-number.js";
+import { radiusToBbox } from "../geo.js";
 
 async function arcgisJson(url, params, headers, timeoutMs) {
   const data = await fetchJson(url, { params: { f: "json", ...params }, headers, timeoutMs });
@@ -132,6 +133,17 @@ export function nearParams(latitude, longitude, radiusMeters) {
   };
 }
 
+/** The circle's bounding box, for servers that ignore a point query's distance. */
+export function envelopeParams(latitude, longitude, radiusMeters) {
+  const [xmin, ymin, xmax, ymax] = radiusToBbox(latitude, longitude, radiusMeters);
+  return {
+    geometry: JSON.stringify({ xmin, ymin, xmax, ymax, spatialReference: { wkid: 4326 } }),
+    geometryType: "esriGeometryEnvelope",
+    inSR: 4326,
+    spatialRel: "esriSpatialRelIntersects",
+  };
+}
+
 // ------------------------------------------------------------- provider
 //
 // Per-source options this provider honours (besides url/searchFields/pageMax):
@@ -140,10 +152,13 @@ export function nearParams(latitude, longitude, radiusMeters) {
 //   headers        extra request headers (e.g. a User-Agent a server insists on)
 //   timeoutMs      per-request timeout for slow servers (default 30 s)
 //   noReproject, noPaging, emptyResultBug   server quirks, see queryLayer/querySource
+//   nearAsEnvelope radius searches send the circle's bounding box (the server ignores a
+//                  point query's distance); the caller trims results to the circle
 //   apiNumeric     the api field is a number, so match it with '=' not UPPER/LIKE
 //   apiDigits14    with apiNumeric: every API is stored as a 14-digit number
 //   dedupeBy       attribute that identifies a well when a layer repeats rows
 //   orderBy        sort for every query (with dedupeBy: which repeated row is kept, e.g. the latest)
+//   fallbackUrl    the same layer on a second service, used when url fails (then for the rest of the process)
 //   prepare()      async; loads lookup tables the normalizer needs (called before each query)
 //   operatorWhere(text)  async; custom SQL for the operator filter (e.g. names -> company numbers)
 
@@ -170,20 +185,41 @@ function withBase(source, where) {
   return source.baseWhere ? `(${source.baseWhere}) AND (${where})` : where;
 }
 
+const useFallback = new Set(); // source keys whose primary url failed
+
+/**
+ * Run a request against the source's url; if it fails and the source names a fallbackUrl
+ * (the same layer published by a second service), retry there and stay there for the
+ * rest of the process.
+ */
+async function withFallback(source, request) {
+  if (source.fallbackUrl && useFallback.has(source.key)) return request(source.fallbackUrl);
+  try {
+    return await request(source.url);
+  } catch (e) {
+    if (!source.fallbackUrl || /error 400/i.test(String(e.message))) throw e; // a bad query fails on both
+    const result = await request(source.fallbackUrl);
+    useFallback.add(source.key);
+    return result;
+  }
+}
+
 /** queryLayer with per-source quirks applied (reprojection bug, 500-on-empty bug, duplicate rows). */
 async function querySource(source, opts) {
   await source.prepare?.();
   let result;
   try {
-    result = await queryLayer(source.url, {
-      outFields: source.outFields ?? "*",
-      orderBy: source.orderBy ?? null,
-      ...opts,
-      noReproject: source.noReproject,
-      noPaging: source.noPaging,
-      headers: source.headers,
-      timeoutMs: source.timeoutMs,
-    });
+    result = await withFallback(source, (url) =>
+      queryLayer(url, {
+        outFields: source.outFields ?? "*",
+        orderBy: source.orderBy ?? null,
+        ...opts,
+        noReproject: source.noReproject,
+        noPaging: source.noPaging,
+        headers: source.headers,
+        timeoutMs: source.timeoutMs,
+      })
+    );
   } catch (e) {
     if (source.emptyResultBug && /error 500/i.test(String(e.message))) return { features: [], exceededLimit: false };
     throw e;
@@ -202,7 +238,10 @@ async function querySource(source, opts) {
 }
 
 const toRows = (features) => features.map((f) => ({ attrs: f.attributes, geometry: f.geometry ?? null }));
-const geometryFor = (near) => (near ? nearParams(near.latitude, near.longitude, near.radiusKm * 1000) : null);
+function geometryFor(source, near) {
+  if (!near) return null;
+  return (source.nearAsEnvelope ? envelopeParams : nearParams)(near.latitude, near.longitude, near.radiusKm * 1000);
+}
 
 function idClauses(source, id) {
   const field = source.searchFields.api;
@@ -223,15 +262,17 @@ export const arcgisProvider = {
       where,
       limit: Math.min(limit, source.pageMax),
       offset,
-      geometryParams: geometryFor(near),
+      geometryParams: geometryFor(source, near),
     });
     return { rows: toRows(features), moreAvailable: exceededLimit, unsupported };
   },
 
   async count(source, filters, { near = null } = {}) {
     const { where, unsupported } = await buildWhere(source, filters);
-    const count = await countLayer(source.url, { where, geometryParams: geometryFor(near), headers: source.headers, timeoutMs: source.timeoutMs });
-    return { count, unsupported };
+    const count = await withFallback(source, (url) =>
+      countLayer(url, { where, geometryParams: geometryFor(source, near), headers: source.headers, timeoutMs: source.timeoutMs })
+    );
+    return { count, ...(near && source.nearAsEnvelope ? { approximate: true } : {}), unsupported };
   },
 
   async findById(source, id) {
