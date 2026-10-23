@@ -235,9 +235,13 @@ uses it). The protocol is a `kind`:
 - `wfs` - OGC WFS 2.0 with GeoJSON output: `dialect: "cql"` for GeoServer,
   `dialect: "fes"` for MapServer, deegree and others that ignore CQL.
 - `rrc-ewa` - the Texas RRC wellbore query (operator, lease and field for Texas).
+- `snapshot` - a small layer fetched whole by the source's `load()` (an API with no
+  attribute filter, a static GeoJSON or CSV file) and searched in memory; refetched
+  every 12 h (`ttlMs`). Fine up to a few tens of thousands of records.
+- `fracfocus` - the FracFocus disclosure API.
 
 Run `npm run smoke -- <KEY>` until search, id and radius checks pass, then
-`node scripts/coverage-table.js` to refresh the tables above.
+`npm run readme` to refresh the tables and the map above.
 
 ## Data licences and attribution
 

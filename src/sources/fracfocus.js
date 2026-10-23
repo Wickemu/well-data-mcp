@@ -15,6 +15,7 @@ export const FRACFOCUS_SOURCES = [
     country: "US",
     state: null,
     kind: "fracfocus",
+    via: "FracFocus API",
     label: "US hydraulic-fracturing disclosures (one record per frac job, with the chemical list)",
     probe: { operator: "Diamondback" },
     agency: "FracFocus (Ground Water Protection Council / Interstate Oil & Gas Compact Commission)",

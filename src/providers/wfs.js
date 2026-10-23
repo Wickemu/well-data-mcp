@@ -7,7 +7,9 @@
 // Source options: url, typeName, geometryName (BBOX target), dialect, outputFormat,
 // srsName, sortBy, baseCql (cql only), noPaging (server ignores startIndex: fetch
 // offset+limit and slice), fallbackUrl (tried when url fails - e.g. a host whose HTTPS
-// front end blocks some networks; remembered for the rest of the process).
+// front end blocks some networks; remembered for the rest of the process),
+// bboxAttrs { lat, lon } (cql only: a layer whose spatial filters return nothing is
+// boxed on its latitude/longitude attributes instead).
 
 import { fetchJson, fetchText } from "../http.js";
 import { radiusToBbox } from "../geo.js";
@@ -32,13 +34,22 @@ const cqlLike = (field, v) => `${field} ILIKE ${cqlQuote(`%${words(String(v).rep
 const cqlEq = (field, v) => `strToUpperCase(${field}) = ${cqlQuote(String(v).trim().toUpperCase())}`;
 
 function cqlBbox(source, [minLon, minLat, maxLon, maxLat]) {
+  const a = source.bboxAttrs;
+  if (a) return `${a.lat} BETWEEN ${minLat} AND ${maxLat} AND ${a.lon} BETWEEN ${minLon} AND ${maxLon}`;
   // 'EPSG:4326' (not the urn form) keeps GeoServer in lon/lat axis order.
   return `BBOX(${source.geometryName}, ${minLon}, ${minLat}, ${maxLon}, ${maxLat}, 'EPSG:4326')`;
 }
 
+// apiNumeric: the id field is a number - compare it as one so the server can use its index.
+function cqlEqFor(source, c) {
+  if (!(source.apiNumeric && c.field === source.searchFields.api)) return cqlEq(c.field, c.value);
+  const digits = String(c.value).replace(/\D/g, "");
+  return `${c.field} = ${digits ? digits.replace(/^0+(?=\d)/, "") : -1}`;
+}
+
 function cqlFilter(source, conditions, box) {
   const parts = source.baseCql ? [`(${source.baseCql})`] : [];
-  for (const c of conditions) parts.push(c.op === "eq" ? cqlEq(c.field, c.value) : cqlLike(c.field, c.value));
+  for (const c of conditions) parts.push(c.op === "eq" ? cqlEqFor(source, c) : cqlLike(c.field, c.value));
   if (box) parts.push(cqlBbox(source, box));
   return parts.length ? parts.join(" AND ") : null;
 }

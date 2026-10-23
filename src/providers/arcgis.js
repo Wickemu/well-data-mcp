@@ -52,12 +52,18 @@ export function apiMatchClauses(field, api) {
 
 const stripZeros = (d) => d.replace(/^0+(?=\d)/, "");
 
-/** Numeric API fields (stored as Double): equality on the digits, then on the 10-digit API. */
-export function numericApiClauses(field, api) {
+/**
+ * Numeric API fields (stored as Double): equality on the digits, then on the 10-digit API.
+ * width14: the layer stores every API as a 14-digit number (USGS orphaned wells), so a
+ * 10- or 12-digit API is padded with zero sidetrack/event digits first.
+ */
+export function numericApiClauses(field, api, width14 = false) {
   const digits = String(api).replace(/\D/g, "");
-  const clauses = [`${field} = ${stripZeros(digits)}`];
-  if (digits.length > 10) clauses.push(`${field} = ${stripZeros(digits.slice(0, 10))}`);
-  return clauses;
+  const values = [digits];
+  if (width14 && [10, 12, 14].includes(digits.length)) {
+    values.splice(0, 1, digits.padEnd(14, "0"), digits.slice(0, 10).padEnd(14, "0"));
+  } else if (digits.length > 10) values.push(digits.slice(0, 10));
+  return [...new Set(values.map(stripZeros))].map((v) => `${field} = ${v}`);
 }
 
 /** WHERE clauses for a non-API identifier (UWI, wellbore name, licence no): exact, then contains. */
@@ -135,6 +141,7 @@ export function nearParams(latitude, longitude, radiusMeters) {
 //   timeoutMs      per-request timeout for slow servers (default 30 s)
 //   noReproject, noPaging, emptyResultBug   server quirks, see queryLayer/querySource
 //   apiNumeric     the api field is a number, so match it with '=' not UPPER/LIKE
+//   apiDigits14    with apiNumeric: every API is stored as a 14-digit number
 //   dedupeBy       attribute that identifies a well when a layer repeats rows
 //   prepare()      async; loads lookup tables the normalizer needs (called before each query)
 //   operatorWhere(text)  async; custom SQL for the operator filter (e.g. names -> company numbers)
@@ -151,6 +158,7 @@ export async function buildWhere(source, filters) {
       continue;
     }
     if (k === "operator" && source.operatorWhere) clauses.push(await source.operatorWhere(v));
+    else if (k === "api" && source.apiDigits14) clauses.push(`(${numericApiClauses(field, v, true).join(" OR ")})`);
     else if (k === "api" && source.apiNumeric) clauses.push(`${field} = ${stripZeros(String(v).replace(/\D/g, "")) || -1}`);
     else clauses.push(k === "api" ? eqClause(field, v) : likeClause(field, v));
   }
@@ -199,7 +207,7 @@ function idClauses(source, id) {
   if (source.apiNumeric) {
     const digits = String(id).replace(/\D/g, "");
     if (!digits) return [];
-    return source.idKind === "us-api" ? numericApiClauses(field, id) : [`${field} = ${stripZeros(digits)}`];
+    return source.idKind === "us-api" ? numericApiClauses(field, id, source.apiDigits14) : [`${field} = ${stripZeros(digits)}`];
   }
   return source.idKind === "us-api" ? apiMatchClauses(field, id) : idMatchClauses(field, id);
 }

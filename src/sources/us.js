@@ -5,6 +5,7 @@
 
 import { msToIso, usDateToIso, isoDate, ymdToIso, coord, num, geomFirst, joinName, centroid } from "./normalize.js";
 import { USER_AGENT } from "../meta.js";
+import { AASG_SOURCES } from "./us-geothermal.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
 
@@ -657,6 +658,54 @@ const STATE_SOURCES = [
     }),
   },
   {
+    key: "NV-NBMG",
+    state: "NV",
+    label: "Great Basin boreholes - Nevada and neighbours (geothermal, oil & gas, groundwater, mining), current",
+    probe: { operator: "Ormat" },
+    agency: "Nevada Bureau of Mines and Geology (University of Nevada, Reno) subsurface database",
+    // Verified 2026-10-23: 216,561 boreholes; newest geothermal spud May 2026.
+    url: "https://gisweb.unr.edu/nbmg/rest/services/NBMGSubsurface/Boreholes/FeatureServer/0",
+    pageMax: 5000,
+    apiStates: ["UT", "CA", "OR", "ID", "AZ"],
+    extent: [-124.6, 31.3, -109.0, 46.3],
+    caveat:
+      "NBMG's compilation of ~217,000 boreholes, kept current from Nevada Division of Minerals and Division of Water Resources permits: ~5,400 geothermal wells (production, injection, thermal-gradient, observation; incl. 2026 spuds), ~1,700 oil, gas and dry holes, and ~196,000 water wells. Mostly Nevada, with some in UT, CA, OR, ID and AZ (stateName). well_type: Geothermal, Oil, Gas, Dry Hole, Groundwater, Mining...; function is production, injection, thermal gradient... Depths in metres; temperatureMaxC is the highest measured temperature.",
+    searchFields: {
+      api: "api_no",
+      well_name: "well_name",
+      operator: "operator_",
+      county: "county",
+      field: "field_name",
+      status: "status",
+      well_type: "well_type",
+    },
+    normalize: (a, g) => ({
+      api: a.api_no,
+      wellName: a.well_name,
+      operator: a.operator_,
+      owner: a.owner_,
+      status: a.status,
+      wellType: a.well_type,
+      function: a.function_,
+      field: a.field_name,
+      county: a.county,
+      stateName: a.state_,
+      latitude: coord(a, "latitude_wgs84", g, "y"),
+      longitude: coord(a, "longitude_wgs84", g, "x"),
+      permitNumber: a.permit_no,
+      permitDate: isoDate(a.permit_issued_date),
+      spudDate: isoDate(a.spud_date),
+      completionDate: isoDate(a.completion_date),
+      depthMD: nz(a.depth_total_m),
+      depthTVD: nz(a.depth_vertical_m),
+      depthUnit: "m",
+      temperatureMaxC: a.temperature_max_measured_c > -999 ? a.temperature_max_measured_c : null,
+      thermalClass: a.thermal_class,
+      formationAtTD: a.formation_td,
+      informationSource: a.information_source,
+    }),
+  },
+  {
     key: "AK",
     state: "AK",
     label: "Alaska oil, gas & geothermal wells (incl. state offshore)",
@@ -1146,6 +1195,46 @@ const STATE_SOURCES = [
       permit: a.Permit,
     }),
   },
+  {
+    key: "FL",
+    state: "FL",
+    label: "Florida oil & gas wells",
+    probe: { operator: "Sklar" },
+    agency: "Florida Department of Environmental Protection, Oil and Gas Program",
+    // Verified 2026-10-23: 1,478 permitted wells.
+    url: "https://ca.dep.state.fl.us/arcgis/rest/services/OpenData/OIL_WELLS/MapServer/0",
+    pageMax: 1000,
+    caveat:
+      "Every permitted well since 1943 (Jay, Blackjack Creek, the Sunniland trend...). Depths in feet; bhtF is the bottom-hole temperature in deg F. documentsUrl opens the well's file in DEP's document portal.",
+    searchFields: {
+      api: "API_NO",
+      well_name: "WELL_NAME",
+      operator: "COMPANY",
+      county: "COUNTY",
+      field: "OIL_FIELD",
+      status: "CURRENT_STATUS",
+    },
+    normalize: (a, g) => ({
+      api: a.API_NO,
+      wellName: a.WELL_NAME,
+      operator: a.COMPANY,
+      status: a.CURRENT_STATUS,
+      historicalStatus: a.HISTORICAL_STATUS,
+      field: a.OIL_FIELD,
+      county: a.COUNTY,
+      latitude: coord(a, "LATITUDE", g, "y"),
+      longitude: coord(a, "LONGITUDE", g, "x"),
+      permitNumber: a.PERMITNO,
+      permitDate: msToIso(a.ISSUE_DATE),
+      spudDate: msToIso(a.SPUD_DATE),
+      completionDate: msToIso(a.COMPLETION_DATE),
+      plugDate: msToIso(a.PLUG_DATE),
+      depthMD: nz(a.MD),
+      depthTVD: nz(a.TVD),
+      bhtF: num(a.BHT_DEG_F),
+      documentsUrl: a.DOCUMENTS,
+    }),
+  },
 
   // ------------------------------------------------- Appalachia / Midwest
   {
@@ -1491,6 +1580,44 @@ const STATE_SOURCES = [
       depthMD: nz(a.TotalDepth),
     }),
   },
+  {
+    key: "VA-HIST",
+    state: "VA",
+    label: "Virginia oil & gas wells - historic, incl. plugged and abandoned",
+    probe: { county: "Lee" },
+    agency: "Virginia Energy, Division of Geology and Mineral Resources (compiled for the National Geothermal Data System)",
+    // Verified 2026-10-23: 1,257 wells.
+    url: "https://energy.virginia.gov/gis/rest/services/DGMR/Geothermal/FeatureServer/8",
+    pageMax: 2000,
+    caveat:
+      "Historic wells incl. plugged and abandoned ones, compiled for the National Geothermal Data System (VA lists active wells only). Depths in metres. lithologyLogUrl links a scanned log where one exists.",
+    searchFields: {
+      api: "API_Number",
+      well_name: "Well",
+      operator: "Operator",
+      county: "County",
+      status: "Status",
+      well_type: "WellType",
+    },
+    normalize: (a, g) => ({
+      api: a.API_Number,
+      wellName: a.Well,
+      operator: a.Operator,
+      status: a.Status,
+      wellType: a.WellType,
+      function: a.Function_,
+      county: a.County,
+      latitude: coord(a, "Latitude", g, "y"),
+      longitude: coord(a, "Longitude", g, "x"),
+      spudDate: msToIso(a.DrillDate),
+      statusDate: msToIso(a.StatusDate),
+      depthMD: nz(a.DrillerTotalDepth_m),
+      depthUnit: "m",
+      formationAtTD: a.Formation_at_TD,
+      commodity: a.CommodityOfInterest,
+      lithologyLogUrl: a.Lithology_Log,
+    }),
+  },
 ];
 
 // Rough state bounding boxes [minLon, minLat, maxLon, maxLat], padded a little and
@@ -1502,13 +1629,16 @@ const STATE_EXTENTS = {
   AZ: [-114.9, 31.3, -109.0, 37.1],
   CA: [-124.6, 32.4, -114.0, 42.1],
   CO: [-109.1, 36.9, -102.0, 41.1],
+  FL: [-87.7, 24.4, -79.9, 31.1],
   HI: [-160.3, 18.8, -154.7, 22.3],
+  IA: [-96.7, 40.3, -90.1, 43.6],
   ID: [-117.3, 41.9, -111.0, 49.1],
   IL: [-91.6, 36.9, -87.4, 42.6],
   IN: [-88.2, 37.7, -84.7, 41.8],
   KS: [-102.1, 36.9, -94.5, 40.1],
   KY: [-89.6, 36.4, -81.9, 39.2],
   LA: [-94.1, 28.8, -88.7, 33.1],
+  MA: [-73.6, 41.2, -69.8, 42.9],
   MI: [-90.5, 41.6, -82.3, 48.4],
   MO: [-95.8, 35.9, -89.0, 40.7],
   MS: [-91.7, 30.1, -88.0, 35.1],
@@ -1527,12 +1657,13 @@ const STATE_EXTENTS = {
   TX: [-106.7, 25.8, -93.4, 36.6],
   UT: [-114.1, 36.9, -109.0, 42.1],
   VA: [-83.7, 36.5, -75.2, 39.5],
+  VT: [-73.5, 42.7, -71.4, 45.1],
   WA: [-124.9, 45.5, -116.9, 49.1],
   WV: [-82.7, 37.2, -77.7, 40.7],
   WY: [-111.1, 40.9, -104.0, 45.1],
 };
 
-export const US_SOURCES = STATE_SOURCES.map((s) => ({
+export const US_SOURCES = [...STATE_SOURCES, ...AASG_SOURCES].map((s) => ({
   country: "US",
   idKind: "us-api",
   extent: STATE_EXTENTS[s.state],

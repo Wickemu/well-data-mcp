@@ -27,6 +27,20 @@ export function msToIso(v) {
   }
 }
 
+/**
+ * A date some servers store as local midnight in UTC ('2006-01-27T03:00:00Z' for
+ * Argentina, 20:00 the day before for UTC+4): round to the nearest midnight first.
+ * Only for fields that are dates, never real times of day. Years past 2100 (placeholders
+ * such as 2999-12-31 for planned wells) become null.
+ */
+export function localMidnightToIso(v) {
+  if (v == null || v === "") return null;
+  const ms = typeof v === "number" ? v : Date.parse(v);
+  if (!Number.isFinite(ms)) return null;
+  const iso = msToIso(Math.round(ms / 86_400_000) * 86_400_000);
+  return iso && iso < "2100" ? iso : null;
+}
+
 /** ISO-ish date or datetime string, 'YYYY/MM/DD', 'YYYYMMDD', or epoch ms -> 'YYYY-MM-DD'; else null. */
 export function isoDate(v) {
   if (v == null || v === "") return null;

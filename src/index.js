@@ -279,7 +279,7 @@ server.registerTool(
   {
     title: "Get a well by its identifier",
     description:
-      "Look up one well by identifier and return its FULL raw record plus the normalized summary. US API numbers in any format (dashes, 10/12/14 digits) are routed to the right state by their 2-digit API state prefix and matched dash-tolerantly. Non-US identifiers (Canadian UWI, Norwegian wellbore name like '15/9-19 A', NLOG/BSS codes...) are matched exactly, then as a contains-match; pass country or source for these to avoid asking every source.",
+      "Look up one well by identifier and return its FULL raw record plus the normalized summary. US API numbers in any format (dashes, 10/12/14 digits) are routed to the right state by their 2-digit API state prefix and matched dash-tolerantly; they also return any FracFocus hydraulic-fracturing disclosures for the well (job dates, water volume, full chemical list). Non-US identifiers (Canadian UWI, Norwegian wellbore name like '15/9-19 A', NLOG/BSS codes...) are matched exactly, then as a contains-match; pass country or source for these to avoid asking every source.",
     inputSchema: {
       api: z.string().min(3).describe("Well identifier: US API number (e.g. 04-029-12345, 4300712345), UWI, wellbore name, or the source's own well code."),
       country: countryArg,

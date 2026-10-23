@@ -41,3 +41,43 @@ export function withinRadius(rows, { latitude, longitude, radiusKm }) {
       haversineKm(latitude, longitude, r.latitude, r.longitude) <= radiusKm
   );
 }
+
+/**
+ * UTM easting/northing (metres) -> { latitude, longitude } on the GRS80/WGS84 ellipsoid
+ * (NAD83 and WGS84 agree to within a metre or so). Standard series inversion (Snyder 1987).
+ */
+export function utmToLatLon(easting, northing, zone, southern = false) {
+  const a = 6378137;
+  const f = 1 / 298.257222101;
+  const k0 = 0.9996;
+  const e2 = f * (2 - f);
+  const ep2 = e2 / (1 - e2);
+  const x = easting - 500000;
+  const y = southern ? northing - 10000000 : northing;
+  const m = y / k0;
+  const mu = m / (a * (1 - e2 / 4 - (3 * e2 ** 2) / 64 - (5 * e2 ** 3) / 256));
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+  const phi1 =
+    mu +
+    ((3 * e1) / 2 - (27 * e1 ** 3) / 32) * Math.sin(2 * mu) +
+    ((21 * e1 ** 2) / 16 - (55 * e1 ** 4) / 32) * Math.sin(4 * mu) +
+    ((151 * e1 ** 3) / 96) * Math.sin(6 * mu) +
+    ((1097 * e1 ** 4) / 512) * Math.sin(8 * mu);
+  const sin1 = Math.sin(phi1);
+  const cos1 = Math.cos(phi1);
+  const tan1 = Math.tan(phi1);
+  const n1 = a / Math.sqrt(1 - e2 * sin1 ** 2);
+  const t1 = tan1 ** 2;
+  const c1 = ep2 * cos1 ** 2;
+  const r1 = (a * (1 - e2)) / (1 - e2 * sin1 ** 2) ** 1.5;
+  const d = x / (n1 * k0);
+  const lat =
+    phi1 -
+    ((n1 * tan1) / r1) *
+      (d ** 2 / 2 -
+        ((5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * ep2) * d ** 4) / 24 +
+        ((61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * ep2 - 3 * c1 ** 2) * d ** 6) / 720);
+  const lon =
+    (d - ((1 + 2 * t1 + c1) * d ** 3) / 6 + ((5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ep2 + 24 * t1 ** 2) * d ** 5) / 120) / cos1;
+  return { latitude: (lat * 180) / Math.PI, longitude: (zone * 6 - 183) + (lon * 180) / Math.PI };
+}

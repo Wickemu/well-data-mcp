@@ -501,6 +501,7 @@ export const EUROPE_SOURCES = [
     country: "CH",
     state: null,
     kind: "snapshot",
+    via: "geo.admin.ch API",
     label: "Switzerland deep wells over 500 m (hydrocarbon, geothermal, salt, thermal water, research)",
     probe: { well_name: "Basel" },
     agency: "swisstopo - Federal Office of Topography (geo.admin.ch)",
