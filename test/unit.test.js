@@ -242,3 +242,41 @@ test("heat flow bundle: loads, filters, radius search nearest-first with summary
   assert.equal(none.matched, 0);
   assert.equal(none.summary, null);
 });
+
+test("snapshot provider: accent-insensitive word search, ids, radius, distinct, caching", async () => {
+  const { snapshotProvider: p, containsWords } = await import("../src/providers/snapshot.js");
+  assert.ok(containsWords("Geothermie Genève", "geneve"));
+  assert.ok(containsWords("ENERGY  GEOSCIENCE INST", "energy geoscience"));
+  assert.ok(!containsWords("Geoscience Energy", "energy geoscience"), "words must appear in order");
+  let loads = 0;
+  const src = {
+    key: "TEST-SNAP",
+    searchFields: { api: "name", well_name: "name", operator: "client", status: "status" },
+    load: async () => {
+      loads++;
+      return [
+        { attrs: { name: "Basel-1", client: "Geopower Basel AG", status: "Open" }, geometry: { x: 7.5956, y: 47.5854 } },
+        { attrs: { name: "Basel-2", client: "Geopower Basel AG", status: "Plugged" }, geometry: { x: 7.6, y: 47.59 } },
+        { attrs: { name: "Genève GEo-01", client: "SIG", status: "Open" }, geometry: { x: 6.1, y: 46.2 } },
+      ];
+    },
+  };
+  assert.equal((await p.search(src, { operator: "geopower basel" }, { limit: 1 })).moreAvailable, true);
+  assert.deepEqual((await p.search(src, { operator: "basel", status: "open" }, { limit: 10 })).rows.map((r) => r.attrs.name), ["Basel-1"]);
+  assert.deepEqual((await p.search(src, { well_type: "x" }, { limit: 10 })).unsupported, ["well_type"]);
+  assert.deepEqual((await p.findById(src, "basel-1")).map((r) => r.attrs.name), ["Basel-1"], "exact id first");
+  assert.equal((await p.findById(src, "geneve")).length, 1, "then contains");
+  const near = await p.search(src, {}, { limit: 10, near: { latitude: 47.5854, longitude: 7.5956, radiusKm: 1 } });
+  assert.equal(near.rows.length, 2);
+  assert.equal((await p.count(src, { status: "open" })).count, 2);
+  assert.deepEqual(await p.distinct(src, "operator", "basel"), ["Geopower Basel AG"]);
+  assert.equal(loads, 1, "loaded once, then served from memory");
+});
+
+test("fracFocusApi: the 14 or 10 digits FracFocus accepts, from any API format", async () => {
+  const { fracFocusApi } = await import("../src/providers/fracfocus.js");
+  assert.equal(fracFocusApi("42-317-40237"), "4231740237");
+  assert.equal(fracFocusApi("42-317-40237-00-00"), "42317402370000");
+  assert.equal(fracFocusApi("423174023700"), "4231740237"); // API-12: drop the sidetrack digits
+  assert.equal(fracFocusApi("31740237"), null); // county + sequence only
+});

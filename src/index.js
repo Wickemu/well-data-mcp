@@ -69,7 +69,7 @@ function unsupportedNote(source, unsupported) {
 async function searchOneSource(source, filters, { limit, offset, near = null, countOnly = false }) {
   const provider = providerFor(source);
   const asked = Object.keys(filters);
-  if (source.requiresOneOf && !asked.some((k) => source.requiresOneOf.includes(k))) {
+  if (source.requiresOneOf && !near && !asked.some((k) => source.requiresOneOf.includes(k))) {
     return {
       source: source.key,
       label: source.label,

@@ -30,7 +30,7 @@ function coreApiDigits(raw) {
 let failures = 0;
 const fmt = (ok, key, check, msg) => {
   if (!ok) failures++;
-  return `${ok ? "ok  " : "FAIL"}  ${key.padEnd(10)} ${check.padEnd(6)} ${msg}`;
+  return `${ok ? "ok  " : "FAIL"}  ${key.padEnd(12)} ${check.padEnd(6)} ${msg}`;
 };
 const line = (...a) => console.log(fmt(...a));
 

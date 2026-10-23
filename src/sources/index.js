@@ -6,6 +6,7 @@
 
 import { US_SOURCES } from "./us.js";
 import { BOEM_SOURCES } from "./boem.js";
+import { FRACFOCUS_SOURCES } from "./fracfocus.js";
 import { AMERICAS_SOURCES } from "./americas.js";
 import { EUROPE_SOURCES } from "./europe.js";
 import { AFRICA_ASIA_SOURCES } from "./africa-asia.js";
@@ -16,6 +17,7 @@ export { normalizeRecord, msToIso, usDateToIso, isoDate, dmyToIso, ymdToIso, nam
 export const SOURCES = [
   ...US_SOURCES,
   ...BOEM_SOURCES,
+  ...FRACFOCUS_SOURCES,
   ...AMERICAS_SOURCES,
   ...EUROPE_SOURCES,
   ...AFRICA_ASIA_SOURCES,
@@ -42,7 +44,6 @@ export const NO_REGISTRY_NOTES = [
   { countries: ["TR"], name: "Turkey", note: "MTA's earth-science viewer exposes no data endpoint; no public well service found. Some Turkish boreholes may appear in EU-GSEU." },
   { countries: ["HU", "AT", "HR", "RO", "GR", "PT", "ES"], name: "Hungary, Austria, Croatia, Romania, Greece, Portugal (incl. Azores), Spain", note: "No national keyless well service found (or only names and basins, as with Spain's IGME layer). Use EU-GSEU, which carries deep boreholes - many geothermal, with bottom-hole temperatures - from these countries' surveys." },
   { countries: ["IT"], name: "Italy", note: "Not yet supported: the ministry (UNMIG) publishes producing hydrocarbon wells only as CSV/KML downloads, without dates or depths; historic wells (ViDEPI) are PDF logs. Italian deep boreholes appear in EU-GSEU." },
-  { countries: ["CH"], name: "Switzerland", note: "Not yet supported: swisstopo publishes wells deeper than 500 m (incl. Basel-1 and other geothermal wells) through the geo.admin.ch API, which needs its own adapter. Swiss boreholes appear in EU-GSEU." },
   // ------------------------------------------------------------------- Africa
   { countries: ["KE"], name: "Kenya", note: "No official machine-readable registry. Petroleum exploration wells: KE-PET, an unofficial copy of the State Department for Petroleum's map. Geothermal wells (Olkaria, Menengai) are held by KenGen and GDC, whose GIS hosts are not public; some Olkaria research data is in the DOE GDR (search_geothermal_datasets); heat flow and temperature gradients across the Kenya Rift: search_heat_flow; plant level: search_gem_projects." },
   { countries: ["NA"], name: "Namibia", note: "No public well registry. The Ministry of Mines and Energy's petroleum licence layers (Landfolio cadastre) need a token, and NAMCOR sells E&P data (incl. the offshore Orange Basin discoveries). Heat flow: search_heat_flow; field level: search_gem_projects." },

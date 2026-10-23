@@ -2,8 +2,45 @@
 // against a live response on 2026-10-06.
 
 import { msToIso, isoDate, dmyToIso, namedDateToIso, num, looseNum, geomFirst } from "./normalize.js";
+import { fetchJson } from "../http.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
+
+/**
+ * Every feature of a geo.admin.ch (swisstopo) layer, via the identify service over the
+ * whole country. Small layers only: identify pages 200 at a time and has no attribute filter.
+ */
+async function geoAdminLayer(layer) {
+  const ch = "5.9,45.8,10.5,47.9";
+  const rows = [];
+  for (let offset = 0; ; offset += 200) {
+    const data = await fetchJson("https://api3.geo.admin.ch/rest/services/api/MapServer/identify", {
+      params: {
+        geometryType: "esriGeometryEnvelope",
+        geometry: ch,
+        mapExtent: ch,
+        imageDisplay: "1000,1000,96",
+        tolerance: "0",
+        layers: `all:${layer}`,
+        sr: "4326",
+        returnGeometry: "true",
+        geometryFormat: "geojson",
+        limit: "200",
+        offset: String(offset),
+      },
+    });
+    const page = data.results ?? [];
+    for (const f of page) {
+      const [x, y] = f.geometry?.coordinates ?? [];
+      rows.push({ attrs: { ...f.properties, featureId: f.featureId }, geometry: Number.isFinite(x) ? { x, y } : null });
+    }
+    if (page.length < 200) return rows;
+  }
+}
+
+/** swisstopo writes unknown values as '-', ' -' or 'No data' (numbers like '~327.5' go through looseNum). */
+const swissText = (v) => (v == null || /^\s*-?\s*$/.test(String(v)) || v === "No data" ? null : v);
+const yearOf = (...vs) => Number(vs.map((v) => /\b(1[89]|20)\d\d\b/.exec(String(v ?? ""))?.[0]).find(Boolean)) || null;
 
 // Orkustofnun's one-letter purpose codes (idtilgangur) for the common geothermal classes.
 const ICELAND_PURPOSE = {
@@ -457,6 +494,56 @@ export const EUROPE_SOURCES = [
       spudDate: isoDate(a.spud_da),
       completionDate: isoDate(a.comp_da),
       detailUrl: a.well_info,
+    }),
+  },
+  {
+    key: "CH-SWISSTOPO",
+    country: "CH",
+    state: null,
+    kind: "snapshot",
+    label: "Switzerland deep wells over 500 m (hydrocarbon, geothermal, salt, thermal water, research)",
+    probe: { well_name: "Basel" },
+    agency: "swisstopo - Federal Office of Topography (geo.admin.ch)",
+    url: "https://api3.geo.admin.ch/rest/services/api/MapServer/ch.swisstopo.geologie-bohrungen_tiefer_500",
+    load: () => geoAdminLayer("ch.swisstopo.geologie-bohrungen_tiefer_500"),
+    pageMax: 500,
+    idKind: "id",
+    idLabel: "well name (e.g. 'Basel-1', 'St-Gallen GT-1')",
+    extent: [5.9, 45.8, 10.5, 47.9],
+    license: "Swiss open government data: free use, source must be cited (swisstopo)",
+    caveat:
+      "All ~160 Swiss wells deeper than 500 m, incl. geothermal Basel-1, St-Gallen GT-1 and Nagra research holes. operator is the client who commissioned the well (owner is the rights holder); county is the canton code (BE, VD...). Many drilling dates are given only to the month or year ('xx.05.2006') - drillYear has the year. temperature is swisstopo's text, e.g. '173.7°C @ 4600m MD'. Each record links its swissgeol.ch borehole page.",
+    searchFields: {
+      api: "name",
+      well_name: "name",
+      operator: "client",
+      county: "canton",
+      status: "status_en",
+      well_type: "purpose_en",
+    },
+    normalize: (a, g) => ({
+      api: a.name,
+      wellName: a.name,
+      operator: swissText(a.client),
+      owner: swissText(a.owner),
+      status: swissText(a.status_en),
+      wellType: swissText(a.purpose_en),
+      county: a.canton,
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      spudDate: dmyToIso(a.spud),
+      endDrillDate: dmyToIso(a.end),
+      drillYear: yearOf(a.spud, a.end),
+      depthMD: looseNum(a.td_m_md),
+      depthTVD: looseNum(a.td_m_tvd),
+      depthUnit: "m",
+      groundElevationM: looseNum(a.zgl),
+      formationAtTD: swissText(a.fm_at_td),
+      shows: swissText(a.discover_en),
+      temperature: swissText(a.temp),
+      reference: swissText(a.info_en),
+      detailUrl: swissText(a.swissgeol),
+      documentationUrl: swissText(a.web_link),
     }),
   },
   {

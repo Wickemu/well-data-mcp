@@ -12,11 +12,15 @@
 import { arcgisProvider } from "./arcgis.js";
 import { wfsProvider } from "./wfs.js";
 import { rrcEwaProvider } from "./rrc-ewa.js";
+import { snapshotProvider } from "./snapshot.js";
+import { fracFocusProvider } from "./fracfocus.js";
 
 const PROVIDERS = {
   arcgis: arcgisProvider,
   wfs: wfsProvider,
   "rrc-ewa": rrcEwaProvider,
+  snapshot: snapshotProvider,
+  fracfocus: fracFocusProvider,
 };
 
 export function providerFor(source) {
