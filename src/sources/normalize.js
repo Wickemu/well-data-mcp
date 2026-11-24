@@ -16,15 +16,13 @@ function ymd(y, m, d) {
   return `${yy}-${pad(mm)}-${pad(dd)}`;
 }
 
+/** Epoch milliseconds -> 'YYYY-MM-DD' (UTC day), with the same year range as the string parsers: placeholders such as 1800-01-01 become null. */
 export function msToIso(v) {
   if (v == null || v === "") return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return isoDate(v);
-  try {
-    return new Date(n).toISOString().slice(0, 10);
-  } catch {
-    return null;
-  }
+  const d = new Date(n);
+  return Number.isNaN(d.getTime()) ? null : ymd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
 }
 
 /**
@@ -128,13 +126,20 @@ export function looseNum(v) {
   return m ? Number(m[0].replace(",", ".")) : null;
 }
 
+/** A closed ring without its closing vertex (the first point repeated), which would pull the average toward it. */
+export function openRing(ring) {
+  const [a, z] = [ring[0], ring.at(-1)];
+  return ring.length > 1 && a[0] === z[0] && a[1] === z[1] ? ring.slice(0, -1) : ring;
+}
+
 /** Point for any ArcGIS geometry: the point itself, or the vertex average of a polygon's first ring. */
 export function centroid(geometry) {
   if (!geometry) return null;
   if (geometry.x != null) return { x: geometry.x, y: geometry.y };
   const ring = geometry.rings?.[0] ?? geometry.paths?.[0];
   if (!ring?.length) return null;
-  return { x: ring.reduce((s, p) => s + p[0], 0) / ring.length, y: ring.reduce((s, p) => s + p[1], 0) / ring.length };
+  const pts = openRing(ring);
+  return { x: pts.reduce((s, p) => s + p[0], 0) / pts.length, y: pts.reduce((s, p) => s + p[1], 0) / pts.length };
 }
 
 /** First non-empty value among the given attribute keys. */
@@ -155,17 +160,48 @@ function trimAttrs(attrs) {
 /**
  * Normalize one record via its source's field map: trims padded strings first, collapses
  * the space padding inside fixed-width names ('NICHOLS       1' -> 'NICHOLS 1'; the id is
- * left exactly as stored so it can be searched again), coerces lat/lon.
+ * left exactly as stored so it can be searched again), rounds storage noise off measured
+ * values, decodes the status / type codes a source lists in `codes`, coerces lat/lon.
  */
 export function normalizeRecord(source, attrs, geometry) {
   const n = source.normalize(trimAttrs(attrs ?? {}), geometry ?? null);
   for (const [k, v] of Object.entries(n)) {
     if (v === "") n[k] = null;
     else if (typeof v === "string" && k !== "api") n[k] = v.replace(/\s{2,}/g, " ");
+    else if (typeof v === "number" && !POSITION_KEY.test(k)) n[k] = tidyNumber(v);
   }
+  decode(n, "status", source.codes?.status);
+  decode(n, "wellType", source.codes?.well_type);
   n.latitude = num(n.latitude);
   n.longitude = num(n.longitude);
   return n;
+}
+
+/**
+ * A measured value without storage noise: float32 artefacts and unit conversions
+ * (1219.199951171875, 4975.5551759208, 304.299999) come back as the number written
+ * (1219.2, 4975.555, 304.3). Seven significant digits is what a float32 holds.
+ */
+export function tidyNumber(v) {
+  return typeof v === "number" && Number.isFinite(v) && !Number.isInteger(v) ? Number(v.toPrecision(7)) : v;
+}
+
+// Positions keep every digit the source gives (seven significant digits is ~10 m at -110.5).
+const POSITION_KEY = /lat|lon/i;
+
+/**
+ * Decode a coded field through the source's `codes` table ({ CODE: 'Label' }), keeping
+ * the code beside the label (statusCode, wellTypeCode). Unknown codes stay as they are.
+ */
+function decode(n, key, table) {
+  const raw = n[key];
+  if (raw == null || !table) return;
+  const code = String(raw).trim();
+  const label = table[code] ?? table[code.toUpperCase()];
+  if (label && label !== raw) {
+    n[`${key}Code`] ??= raw;
+    n[key] = label;
+  }
 }
 
 /**

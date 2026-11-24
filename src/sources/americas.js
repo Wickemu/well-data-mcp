@@ -1,14 +1,35 @@
 // Canada, Latin America and the Caribbean. Every endpoint and field name below was
 // verified against a live response on 2026-10-06.
 
-import { msToIso, isoDate, usDateToIso, dmyToIso, namedDateToIso, localMidnightToIso, num, looseNum, geomFirst, centroid } from "./normalize.js";
+import { msToIso, isoDate, usDateToIso, dmyToIso, namedDateToIso, localMidnightToIso, num, looseNum, geomFirst, centroid, joinName } from "./normalize.js";
+import { BC_ACTIVITY, BC_FLUID, NL_OPERATIONS, mbStatusText } from "./americas-codes.js";
+import { codedClause, likeClause } from "../providers/arcgis.js";
 import { fetchBuffer } from "../http.js";
 import { unzipEntry } from "../zip.js";
 import { readDbf } from "../dbf.js";
 import { utmToLatLon } from "../geo.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
-const no9999 = (v) => (v == null || v <= -9999 ? null : v);
+// The AGS geothermal layers mark missing values -9999 (Swan Hills, Leduc) or -999.99 (Granite
+// Wash); no real value of these fields is negative (depths, elevations, temperatures, power).
+const no9999 = (v) => (v == null || v <= -999 ? null : v);
+
+/** Colombia's EPIS fills unknown spud dates with 1900-01-01. */
+export const coDate = (v) => {
+  const d = msToIso(v);
+  return d && d >= "1900-01-02" ? d : null;
+};
+
+/** The http(s) links in a Yukon reference list ('https://a.pdf; https://b.pdf; EMR Library hard copy'). */
+export function referenceUrls(v) {
+  const urls = String(v ?? "")
+    .split(/[;\s]+/)
+    .filter((p) => /^https?:\/\//i.test(p));
+  return urls.length ? urls.join("; ") : null;
+}
+
+/** NL-OFF writes a missing status as the text '<Null>' or a blank. */
+export const nlStatus = (v) => (v == null || ["<NULL>", ""].includes(String(v).trim().toUpperCase()) ? null : v);
 
 // The Alberta Geological Survey's geothermal resource layers share one schema: wells that
 // reach a formation, with its depth, average temperature and heat-in-place estimates.
@@ -28,6 +49,7 @@ function albertaGeothermal({ key, service, layer, formation, probe }) {
     license: "Open Government Licence - Alberta",
     caveat: `AGS geothermal resource assessment: one record per well that reaches the ${formation}, with the formation's top and base depth (m TVD), average temperature (deg C) and heat-in-place / power estimates. No well name, operator or dates.`,
     searchFields: { api: "UWI", field: "Geol_unit" },
+    uwi: { style: "compact" }, // '100010105619W503'; any spelling of a UWI finds it
     normalize: (a, g) => ({
       api: a.UWI,
       wellName: null,
@@ -51,7 +73,8 @@ async function loadManitoba() {
   const zip = await fetchBuffer("https://www.gov.mb.ca/iem/petroleum/gis/wells.zip", { timeoutMs: 60_000 });
   return readDbf(unzipEntry(zip, ".dbf")).map((a) => {
     const p = a.EASTING && a.NORTHING ? utmToLatLon(a.EASTING, a.NORTHING, 14) : null;
-    return { attrs: a, geometry: p ? { x: p.longitude, y: p.latitude } : null };
+    // STATUS_TEXT: the status in words for every well (horizontal wells carry only a code).
+    return { attrs: { ...a, STATUS_TEXT: mbStatusText(a) }, geometry: p ? { x: p.longitude, y: p.latitude } : null };
   });
 }
 
@@ -75,6 +98,7 @@ function saskatchewan({ key, layer, label, probe, extraCaveat }) {
     idKind: "id",
     idLabel: "wellbore UWI",
     dedupeBy: "WELL_CWI", // one row per wellbore completion
+    uwi: { style: "sk" }, // stored 'SK-WI-101021001718W300'; any spelling of a UWI finds it
     extent: [-110.1, 48.9, -101.3, 60.1],
     caveat: `Updated daily. One record per well (completions de-duplicated); status/type/pool describe the first completion returned. ${extraCaveat}`,
     searchFields: {
@@ -113,6 +137,11 @@ function saskatchewan({ key, layer, label, probe, extraCaveat }) {
         depthTVD: looseNum(a.WELLBORE_BH_TRUEVERTICALDEPTH),
         depthUnit: "m",
         licence: a.WELLLICENCENUMBER,
+        surfaceLocation: a.SURFACELANDLOCATION,
+        bottomHoleLocation: a.BOTTOMHOLELANDLOCATION,
+        bottomHoleLatitude: nz(a.BOTTOMHOLELATITUDE),
+        bottomHoleLongitude: nz(a.BOTTOMHOLELONGITUDE),
+        confidentialUntil: msToIso(a.WELLOFFCONFIDENTIALDATE),
       };
     },
   };
@@ -123,30 +152,38 @@ export const AMERICAS_SOURCES = [
   saskatchewan({
     key: "SK",
     layer: 0,
-    label: "Saskatchewan oil & gas wells (vertical)",
+    label: "Saskatchewan oil & gas wellbores with a point location (mostly vertical)",
     probe: { operator: "Whitecap" },
-    extraCaveat: "Horizontal and directional wells are in SK-HZ.",
+    // The two layers split by how the bore is mapped (point or path), not by trajectory.
+    extraCaveat:
+      "Wellbores whose drilled path is mapped are in SK-HZ, and some horizontal and directional bores are here; a multi-leg well can have bores in both. wellId (WELL_CWI) identifies the well across both.",
   }),
   saskatchewan({
     key: "SK-HZ",
     layer: 1,
-    label: "Saskatchewan oil & gas wells (horizontal / directional)",
+    label: "Saskatchewan oil & gas wellbores with a drilled path (mostly horizontal / directional)",
     probe: { operator: "Whitecap" },
-    extraCaveat: "Vertical wells are in SK.",
+    extraCaveat:
+      "Wellbores mapped as a point are in SK, and some vertical bores are here; a multi-leg well can have bores in both. wellId (WELL_CWI) identifies the well across both.",
   }),
   {
     key: "BC",
     country: "CA",
     state: "BC",
-    label: "British Columbia oil & gas wells",
+    label: "British Columbia oil & gas wells - bottom holes (one record per drilled leg)",
     probe: { well_name: "Tourmaline" },
     agency: "BC Energy Regulator (BCER)",
     url: "https://geoweb-ags.bc-er.ca/arcgis/rest/services/WELL/WELL_BOTTOM_HOLE_STATE_PT/FeatureServer/0",
     pageMax: 2000,
     idKind: "id",
-    idLabel: "UWI",
+    idLabel: "UWI (e.g. '200A079B094H0400') or well authority number (WA, e.g. '00061')",
+    uwi: { style: "compact" }, // '200A079B094H0400', '102160308220W600'
+    // The WA number is BC's own well id; '61' is '00061'. Only up to five digits, so a UWI's digits never land here.
+    idAlso: { field: "WELL_AUTHORITY_NUMBER", test: /^\d{1,5}$/, pad: 5 },
+    codes: { status: BC_ACTIVITY, well_type: BC_FLUID },
     extent: [-139.1, 48.2, -114.0, 60.1],
-    caveat: "Bottom-hole locations. operator is BCER's operator abbreviation; no spud date or depth in this layer.",
+    caveat:
+      "Bottom-hole locations, one record per drilled leg: a horizontal well's bottom hole is usually 2-5 km from its pad - for the wells around a surface point, and wells authorized but not yet drilled, see BC-SURFACE (same WA number). operator is BCER's abbreviation; no spud date or depth in this layer. status and wellType are BCER codes decoded (statusCode / wellTypeCode keep the code).",
     searchFields: {
       api: "UNIQUE_WELL_IDENTIFIER",
       well_name: "WELL_NAME",
@@ -165,6 +202,49 @@ export const AMERICAS_SOURCES = [
       operationType: a.OPERATION_TYPE,
       field: a.WELL_AREA_NAME,
       ...geomFirst(a, g),
+      surfaceLocation: a.WELL_SURFACE_LOC,
+      bottomHoleLocation: a.WELL_BOTTOM_LOCATION,
+      statusDate: msToIso(a.STATUS_EFFECTIVE_DATE),
+      wellNameDate: msToIso(a.WELL_NAME_EFFECTIVE_DATE),
+      confidential: a.CONFIDENTIAL_FLAG,
+    }),
+  },
+  {
+    key: "BC-SURFACE",
+    country: "CA",
+    state: "BC",
+    label: "British Columbia oil & gas wells - surface holes (incl. authorized, not yet drilled)",
+    probe: { operator: "Tourmaline" },
+    agency: "BC Energy Regulator (BCER)",
+    url: "https://geoweb-ags.bc-er.ca/arcgis/rest/services/PASR/PASR_WELL_SURFACE_STATE_PT/FeatureServer/0",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "well authority number (WA, e.g. '00061')",
+    idAlso: { field: "WELL_AUTHORITY_NUMBER", test: /^\d{1,4}$/, pad: 5 }, // '61' is '00061'
+    codes: { status: BC_ACTIVITY, well_type: BC_FLUID },
+    extent: [-139.1, 48.2, -114.0, 60.1],
+    caveat:
+      "One record per well authorization (~34,000) at its surface hole, including wells authorized but not drilled (status 'Well authorization granted') and cancelled ones; wells on a pad share a point. UWIs and bottom-hole positions are in BC under the same WA number. operator is BCER's abbreviation; no spud date or depth. status and wellType are BCER codes decoded.",
+    searchFields: {
+      api: "WELL_AUTHORITY_NUMBER",
+      well_name: "WELL_NAME",
+      operator: "OPERATOR_ABBREVIATION",
+      field: "WELL_AREA_NAME",
+      status: "WELL_ACTIVITY",
+      well_type: "BORE_FLUID_TYPE",
+    },
+    normalize: (a, g) => ({
+      api: a.WELL_AUTHORITY_NUMBER,
+      wellAuthority: a.WELL_AUTHORITY_NUMBER,
+      wellName: a.WELL_NAME,
+      operator: a.OPERATOR_ABBREVIATION,
+      status: a.WELL_ACTIVITY,
+      wellType: a.BORE_FLUID_TYPE,
+      operationType: a.OPERATION_TYPE,
+      field: a.WELL_AREA_NAME,
+      surfaceLocation: a.WELL_SURFACE_LOCATION,
+      ...geomFirst(a, g),
+      authorizationDate: msToIso(a.WELL_AUTHORIZATION_GRANT_DATE),
       statusDate: msToIso(a.STATUS_EFFECTIVE_DATE),
       confidential: a.CONFIDENTIAL_FLAG,
     }),
@@ -205,6 +285,12 @@ export const AMERICAS_SOURCES = [
       plugDate: msToIso(a.PLUGGING_END_DATE),
       depthMD: nz(a.TOTAL_DEPTH),
       depthTVD: nz(a.TRUE_VERTICAL_DEPTH),
+      depthUnit: "m",
+      groundElevationM: nz(a.GROUND_ELEVATION),
+      bottomHoleLatitude: nz(a.BOTTOM_LATITUDE_83),
+      bottomHoleLongitude: nz(a.BOTTOM_LONGITUDE_83),
+      lot: a.LOT,
+      concession: a.CONCESSION,
       offshoreBlock: a.OFFSHORE_BLOCK,
     }),
   },
@@ -215,12 +301,16 @@ export const AMERICAS_SOURCES = [
     label: "Newfoundland & Labrador offshore wells",
     probe: { operator: "Exxon" },
     agency: "Newfoundland and Labrador Department of Industry, Energy and Technology",
-    url: "https://services8.arcgis.com/jSziFsB3BeiveI9A/arcgis/rest/services/NL_Petro_Well/FeatureServer/106",
+    // The layer id changes when the province republishes the service (106 until October 2026); the provider finds the new one.
+    url: "https://services8.arcgis.com/jSziFsB3BeiveI9A/arcgis/rest/services/NL_Petro_Well/FeatureServer/114",
     pageMax: 2000,
     idKind: "id",
     idLabel: "UWI",
     extent: [-67.0, 40.0, -42.0, 61.0],
-    caveat: "Includes re-entries as separate records. Depths in metres.",
+    caveat: "Includes re-entries as separate records. Depths in metres. Wells with operations under way carry an operations status ('Drilling Operations', 'Suspending/Suspended'; statusCode keeps the layer's code).",
+    codes: { status: NL_OPERATIONS },
+    // Most statuses are plain text ('Abandoned Oil Producer'), a few are domain codes: match both.
+    filterWhere: { status: async (text) => `(${codedClause("Well_Statu", text, NL_OPERATIONS)} OR ${likeClause("Well_Statu", text)})` },
     searchFields: {
       api: "Unique_Wel",
       well_name: "Well_Name",
@@ -233,14 +323,17 @@ export const AMERICAS_SOURCES = [
       api: a.Unique_Wel,
       wellName: a.Well_Name,
       operator: a.Operator,
-      status: a.Well_Statu,
+      status: nlStatus(a.Well_Statu),
       wellType: a.Classifica,
       field: a.Area,
       landTenure: a.Land_Tenur,
       ...geomFirst(a, g, "LATDDddddd", "LNGDDddddd"),
       spudDate: msToIso(a.Spud_Date1),
       endDate: msToIso(a.Well_Ter_1),
+      dataReleaseDate: msToIso(a.Data_Rel_1),
       depthMD: nz(a.Total_Dept),
+      depthUnit: "m",
+      rtElevationM: nz(a.Datum__m_),
       waterDepth: nz(a.Water_Dept),
       inventoryUrl: a.Well_Inv,
       summaryUrl: a.WellSum,
@@ -257,10 +350,12 @@ export const AMERICAS_SOURCES = [
     pageMax: 2000,
     timeoutMs: 60_000, // NRCan's server often takes 15-30 s
     idKind: "id",
-    idLabel: "well name",
+    idLabel: "well name and number (e.g. 'Onondaga E-84')",
     extent: [-67.0, 41.0, -56.0, 47.5],
     license: "Open Government Licence - Canada",
-    caveat: "The regulator's 2022 directory of wells.",
+    caveat:
+      "The regulator's 2022 directory of wells. One name covers several wells ('Onondaga' E-84, O-95, F-75...): the grid number after it identifies the well. result is the outcome ('gas well', 'dry hole'). Depths and elevations in metres.",
+    wellNumberField: "Well_Nam_1", // the grid number ('E-84'), apart from the name
     searchFields: {
       api: "Well_Name",
       well_name: "Well_Name",
@@ -269,15 +364,19 @@ export const AMERICAS_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.Well_Name,
-      wellName: a.Well_Name,
+      wellName: joinName(a.Well_Name, a.Well_Nam_1),
+      wellNumber: a.Well_Nam_1,
       operator: a.Company,
-      status: null,
+      status: a.Well_1,
+      result: a.Well,
       wellType: a.Well_Type,
       ...geomFirst(a, g, "latitude_d", "longitud_1"),
       spudDate: namedDateToIso(a.Spud_Date),
       endDate: namedDateToIso(a.Well_Termi),
       depthMD: nz(a.Total_Dept),
+      depthUnit: "m",
       waterDepth: nz(a.Water_Dept),
+      rtElevationM: nz(a.RT_Elevati),
       rig: a.Drilling_U,
     }),
   },
@@ -344,6 +443,9 @@ export const AMERICAS_SOURCES = [
       classification: a.WELL_CLASSIFICATION,
       field: a.SEDIMENT_BASIN_NAME,
       ...geomFirst(a, g, "LATITUDE_DD", "LONGITUDE_DD"),
+      licence: a.WELL_LICENCE_NUMBER != null ? String(a.WELL_LICENCE_NUMBER) : null,
+      drillingOperator: a.OPERATOR || null, // differs from the licensee on historic wells
+      gridLocation: a.GRID_LOCATION,
       licensedDate: msToIso(a.LICENSED_DATE),
       firstProductionDate: msToIso(a.FIRST_PRODUCTION_DATE),
       abandonDate: msToIso(a.ABANDONED_DATE),
@@ -384,6 +486,8 @@ export const AMERICAS_SOURCES = [
       heatFlow: num(a.HEAT_FLOW),
       thermalConductivity: num(a.THERM_COND),
       reference: a.REFERENCE,
+      referenceUrl: referenceUrls(a.REF_LINK),
+      elevationM: nz(a.ELEVATION),
     }),
   },
   {
@@ -400,13 +504,15 @@ export const AMERICAS_SOURCES = [
     extent: [-120.1, 48.9, -109.9, 60.1],
     license: "Open Government Licence - Alberta",
     caveat:
-      "Every well in AER's ST37 list (~475,000) as of March 2024, but only its surface location and status/fluid ('Abandoned Gas', 'Suspended Oil'...): no UWI, licence, licensee, name or dates. Several wells on one pad share a location. Licensee and well details are in AER/Petrinex bulk downloads only (ST37, Petrinex 'Well Licence' and 'Well Infrastructure' files).",
-    searchFields: { api: "Surface_Location", status: "Well_Category" },
+      "Every well in AER's ST37 list (~475,000) as of March 2024, but only its surface location, status/fluid ('Abandoned Gas', 'Suspended Oil'...) and, for some, a well type ('Production', 'Observation'): no UWI, licence, licensee, name or dates. Several wells on one pad share a location. A UWI is looked up by its location (LSD-SEC-TWP-RGE W#), which is the bottom hole: for a deviated well the wells found are those whose surface is there, which may be other wells. AB-AER-ABANDONED has today's licensee and licence number for abandoned wells, AB-NAMES-2016 the well names as of 2016; other details are in AER/Petrinex bulk downloads only (ST37, Petrinex 'Well Licence' and 'Well Infrastructure' files).",
+    uwi: { style: "dls" }, // stored '11-32-040-11W4'
+    searchFields: { api: "Surface_Location", status: "Well_Category", well_type: "Well_Type" },
     normalize: (a, g) => ({
       api: a.Surface_Location,
       wellName: null,
       operator: null,
       status: a.Well_Category,
+      wellType: a.Well_Type || null,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
     }),
@@ -433,6 +539,69 @@ export const AMERICAS_SOURCES = [
     probe: { field: "Leduc" },
   }),
   {
+    key: "AB-AER-ABANDONED",
+    country: "CA",
+    state: "AB",
+    label: "Alberta abandoned wells with licence number and licensee (AER Abandoned Well Map)",
+    probe: { operator: "Obsidian" },
+    agency: "Alberta Energy Regulator (AER) - Abandoned Well Map",
+    url: "https://gis.aer.ca/arcgis/rest/services/WMS-Public/ICD_AbandonedWell_Ext_Proxy/MapServer/1",
+    pageMax: 2000,
+    // The AER firewall rejects SQL functions, IN (...) and any '%': text filters are matched
+    // against the layer's own distinct values and sent as equality (see arcgis.js plainSql).
+    plainSql: true,
+    idKind: "id",
+    idLabel: "AER well licence number (7 digits, e.g. '0130917'; shorter numbers are zero-padded)",
+    idFormat: (v) => (/^\d{1,7}$/.test(String(v).trim()) ? String(v).trim().padStart(7, "0") : String(v).trim()),
+    extent: [-120.1, 48.9, -109.9, 60.1],
+    license: "AER public map service; no open licence stated on the service (AER copyright and disclaimer apply)",
+    caveat:
+      "~238,000 abandoned wells, each with its well licence number, current licensee (company name and AER business-associate code), licence status (Abandoned, RecCertified, RecExempt, Issued...) and the substance it last produced or injected. No UWI, well name or dates. surfaceLocation is the licence's surface location in the same form as the AB source ('16-02-073-06W4'), so it joins to AB; several wells on one pad share it. Text filters match the AER's own spellings (operator 'Obsidian' finds 'Obsidian Energy Ltd.').",
+    searchFields: {
+      api: "Well_Licence_Number",
+      operator: "Licensee_BA_Name",
+      status: "Licence_Status",
+      well_type: "Primary_Status_Fluid_Label",
+    },
+    normalize: (a, g) => ({
+      api: a.Well_Licence_Number,
+      wellName: null,
+      operator: a.Licensee_BA_Name,
+      licenseeCode: a.Licensee_BA_Id,
+      status: a.Licence_Status,
+      wellType: a.Primary_Status_Fluid_Label === "Not Applicable" ? null : a.Primary_Status_Fluid_Label,
+      surfaceLocation: a.Licence_Surface_Location_Label,
+      ...geomFirst(a, g, "SH_Actual_Latitude", "SH_Actual_Longitude"),
+    }),
+  },
+  {
+    key: "AB-NAMES-2016",
+    country: "CA",
+    state: "AB",
+    label: "Alberta wells with names and licence numbers (AER well list as of December 2016, NETL copy)",
+    probe: { well_name: "Wildhorse" },
+    agency: "AER well licence list (Dec 2016) as compiled in the US DOE NETL Global Oil & Gas Infrastructure (GOGI) database",
+    url: "https://arcgis.netl.doe.gov/server/rest/services/EDXSpatialCaches/Wells_223_2025/MapServer/15",
+    baseWhere: "md_fkey = '160'", // the Alberta rows of NETL's Canada layer
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "AER well licence number (7 digits, e.g. '0065081')",
+    idAlso: { field: "type", test: /^\d{1,6}$/, pad: 7 }, // '65081' is '0065081'
+    extent: [-120.1, 48.9, -109.9, 60.1],
+    license: "US DOE NETL EDX public data (GOGI); source data AER",
+    caveat:
+      "~445,000 Alberta wells as licensed in December 2016: well name ('CMG PCGAS WILDHORSE 6-6-1-1'), licence number and licence status, at the surface location. Not updated since 2016 and no licensee (the NETL copy dropped it): AB-AER-ABANDONED has today's licensee for abandoned wells under the same licence number. NETL stores the licence number in its 'type' field.",
+    searchFields: { api: "type", well_name: "facility_name", status: "status" },
+    normalize: (a, g) => ({
+      api: a.type,
+      wellName: a.facility_name,
+      operator: null,
+      status: a.status,
+      ...geomFirst(a, g),
+      asOf: "2016-12-19",
+    }),
+  },
+  {
     key: "MB",
     country: "CA",
     state: "MB",
@@ -446,16 +615,17 @@ export const AMERICAS_SOURCES = [
     ttlMs: 24 * 3600_000,
     pageMax: 2000,
     idKind: "id",
-    idLabel: "well licence number",
+    idLabel: "well licence number, or a UWI / legal location ('100/08-31-005-29W1/00', '08-31-05-29 W1')",
+    uwi: { style: "mb", field: "LOCATION" }, // LOCATION: the bottom hole of horizontal wells, the surface of vertical ones
     extent: [-102.1, 48.9, -88.9, 60.1],
     caveat:
-      "Every licensed well (~12,000), from the Petroleum Branch's weekly shapefile. status is the map status ('Producer', 'Abandoned producer', 'Dry and abandoned'...); for horizontal wells the layer gives only a status code (statusCode, e.g. COOP). No spud date, depth or field. county searches the legal location (LSD-SEC-TWP-RGE). technicalDocsUrl links the well's scanned file.",
-    searchFields: { api: "LICENCE", well_name: "NAME", operator: "COMPANY", county: "LOCATION", status: "MAP_STATUS" },
+      "Every licensed well (~12,000), from the Petroleum Branch's weekly shapefile. status is the map status ('Producer', 'Abandoned producer', 'Dry and abandoned'...), for horizontal wells decoded from the layer's status code (statusCode, e.g. COOP). No spud date, depth or field. county searches the legal location (LSD-SEC-TWP-RGE): the bottom hole for horizontal wells, the surface for vertical ones. technicalDocsUrl links the well's scanned file.",
+    searchFields: { api: "LICENCE", well_name: "NAME", operator: "COMPANY", county: "LOCATION", status: "STATUS_TEXT" },
     normalize: (a, g) => ({
       api: a.LICENCE != null ? String(a.LICENCE) : null,
       wellName: a.NAME,
       operator: a.COMPANY,
-      status: a.MAP_STATUS === "Horizontal or directional surface location" ? a.STATUS : a.MAP_STATUS,
+      status: a.STATUS_TEXT ?? mbStatusText(a), // a copy cached before STATUS_TEXT existed has none
       statusCode: a.STATUS,
       statusDate: isoDate(a.STATUS_DAT),
       wellType: DEVIATION[a.DEVIATION_] ?? a.DEVIATION_,
@@ -635,6 +805,10 @@ export const AMERICAS_SOURCES = [
       spudDate: namedDateToIso(a.fecha_inic),
       endDate: namedDateToIso(a.fecha_fin_),
       depthMD: nz(a.profundida),
+      // 'Profundidad vertical'; it differs from depthMD on many wells marked VERTICAL, so it is not called TVD.
+      verticalDepth: nz(a.profundi_1),
+      depthUnit: "m",
+      dataAvailability: a.disponible,
       trajectory: a.trayectori,
     }),
   },
@@ -653,7 +827,7 @@ export const AMERICAS_SOURCES = [
     idKind: "id",
     idLabel: "UWI",
     extent: [-79.5, -4.3, -66.8, 13.5],
-    caveat: "Updated continuously (FECHA_ACTU). Some class/status values are placeholders ('0', blank).",
+    caveat: "Updated continuously (FECHA_ACTU). Some class/status values are placeholders ('0', blank); placeholder spud dates (1900-01-01) are dropped. Depths and elevations in feet.",
     searchFields: {
       api: "UWI",
       well_name: "WELL_NAME",
@@ -676,10 +850,14 @@ export const AMERICAS_SOURCES = [
       municipality: a.WELL_COU_1,
       contract: a.CONTRATO,
       ...geomFirst(a, g, "WELL_LATIT", "WELL_LONGI"),
-      spudDate: msToIso(a.WELL_SPUD_),
-      completionDate: msToIso(a.WELL_COMPL),
+      spudDate: coDate(a.WELL_SPUD_),
+      completionDate: coDate(a.WELL_COMPL),
       depthMD: nz(a.WELL_DRILL),
       depthTVD: nz(a.WELL_TVD),
+      depthUnit: "ft", // e.g. CASTILLA ESTE-1: 7420 here, 1938.5 m in CO-GEO's notes
+      kbElevationFt: nz(a.WELL_KB_EL),
+      groundElevationFt: nz(a.WELL_GROUN),
+      deviation: a.WELLDEVIAT,
       updatedDate: msToIso(a.FECHA_ACTU),
     }),
   },
@@ -699,7 +877,7 @@ export const AMERICAS_SOURCES = [
     idKind: "id",
     idLabel: "ANP well register number (cadastro)",
     extent: [-74.0, -34.0, -28.0, 5.5],
-    caveat: "Refreshed daily. Depths in metres. ambiente T = onshore, M = offshore.",
+    caveat: "Refreshed daily. Depths in metres. ambiente T = onshore, M = offshore. ANP's servers sit behind a firewall that refuses some networks outright (HTTP 403 'you have been blocked', seen from the US in November 2026); from such a network this source cannot be queried.",
     searchFields: {
       api: "cadastro",
       well_name: "name",
@@ -728,6 +906,10 @@ export const AMERICAS_SOURCES = [
       completionDate: dmyToIso(a.dat_conclusao),
       depthMD: nz(a.prof_medid),
       depthTVD: nz(a.prof_vert),
+      depthUnit: "m",
+      formationAtTD: a.geo_form_f,
+      rotaryTableElevationM: nz(a.mesa_rotativa),
+      groundElevationM: nz(a.cota_altim),
       waterDepth: nz(a.lamina_dagua),
       direction: a.direcao,
       rig: a.nome_sonda,
@@ -827,6 +1009,8 @@ export const AMERICAS_SOURCES = [
       endDrillDate: isoDate(a.adjiv_fecha_fin_perf),
       completionDate: isoDate(a.adjiv_fecha_fin_term),
       depthMD: nz(a.profundidad_metros),
+      depthUnit: "m",
+      elevationM: nz(a.cota_metros),
       extraction: a.tipoextraccion,
     }),
   })),
@@ -932,55 +1116,6 @@ export const AMERICAS_SOURCES = [
     }),
   },
   {
-    key: "BO",
-    country: "BO",
-    state: null,
-    label: "Bolivia oil & gas wells",
-    probe: { operator: "Repsol" },
-    agency: "Ministerio de Hidrocarburos y Energías de Bolivia (Viceministerio de Exploración y Explotación)",
-    url: "https://services.arcgis.com/ZvJ7dOfEfexanMpI/arcgis/rest/services/Map_Pozos_WFL1/FeatureServer/0",
-    pageMax: 2000,
-    idKind: "id",
-    idLabel: "well code (sigla, e.g. 'BJO-X2')",
-    extent: [-69.7, -22.95, -57.4, -9.6],
-    caveat:
-      "The ministry's 2026 well register: ~2,000 drilled wells (sourced from the national hydrocarbon information centre, CNIH) plus ~90 planned wells marked as new projects (projectStatus), whose placeholder dates are dropped. status is the well result (PRODUCTOR, NEGATIVO...), type its classification (EXPLORATORIO, DESARROLLO...). county filters by department. Depths in metres. This is the ministry's working layer and may change.",
-    searchFields: {
-      api: "SIGLA_POZO",
-      well_name: "NOMBRE_POZO",
-      operator: "OPERADOR",
-      county: "DEPARTAMENTO",
-      field: "CAMPO",
-      status: "RESULTADO",
-      well_type: "CLASIFICACION",
-    },
-    normalize: (a, g) => ({
-      api: a.SIGLA_POZO,
-      wellId: a.ID_POZO,
-      wellName: a.NOMBRE_POZO,
-      operator: a.OPERADOR,
-      status: a.RESULTADO,
-      wellType: a.CLASIFICACION,
-      field: a.CAMPO,
-      concession: a.AREA_CONTRATO,
-      basin: a.CUENCA_PROV_HIDRO,
-      county: a.DEPARTAMENTO,
-      province: a.PROVINCIA,
-      municipality: a.MUNICIPIO,
-      ...geomFirst(a, g, "LAT_WGS84", "LONG_WGS84"),
-      spudDate: localMidnightToIso(a.FECHA_INI),
-      endDrillDate: localMidnightToIso(a.FECHA_FIN),
-      completionDate: localMidnightToIso(a.FECHA_COMP),
-      abandonDate: localMidnightToIso(a.FECHA_ABAN),
-      drillYear: a.ANIO && a.ANIO < 2100 ? a.ANIO : null,
-      depthMD: nz(a.PROF_MD_M),
-      depthTVD: nz(a.PROF_TVD_M),
-      depthUnit: "m",
-      projectStatus: a.ESTADO_GEST,
-      source: a.FUENTE,
-    }),
-  },
-  {
     key: "CO-GEO",
     country: "CO",
     state: null,
@@ -994,7 +1129,7 @@ export const AMERICAS_SOURCES = [
     extent: [-79.1, -4.3, -66.8, 13.5],
     license: "CC BY 4.0",
     caveat:
-      "~4,600 petroleum wells behind Colombia's geothermal gradient map (2024): bottom-hole temperature, the depth of the reading (m), surface temperature and the observed and corrected gradient (deg C/km). No operator, status or dates beyond the year; those are in CO-EPIS under the same UWI. field filters by basin.",
+      "~4,600 petroleum wells behind Colombia's geothermal gradient map (2024): bottom-hole temperature, the depth of the reading (bhtDepthM, metres), total depth (depthMD, feet, as in CO-EPIS), surface temperature and the observed and corrected gradient (deg C/km). No operator, status or dates beyond the year; those are in CO-EPIS under the same UWI. field filters by basin.",
     searchFields: { api: "UWI", well_name: "NOMBRE_DEL", county: "DEPARTAMEN", field: "CUENCA" },
     normalize: (a, g) => ({
       api: a.UWI,
@@ -1004,6 +1139,9 @@ export const AMERICAS_SOURCES = [
       county: a.DEPARTAMEN,
       field: a.CUENCA,
       ...geomFirst(a, g, "LATITUD", "LONGITUD"),
+      depthMD: nz(a.PROFUNDIDA),
+      depthUnit: "ft",
+      elevationM: nz(a.ELEVACION),
       bhtC: nz(a.BHT__OC_),
       bhtDepthM: nz(a.PROFUNDI_2),
       surfaceTempC: nz(a.TEMPERATUR),
@@ -1109,6 +1247,56 @@ export const AMERICAS_SOURCES = [
       longitude: g?.x ?? null,
       depthMD: nz(a.total_dept),
       depthUnit: "ft",
+    }),
+  },
+  {
+    key: "BO-MHE",
+    country: "BO",
+    state: null,
+    label: "Bolivia oil & gas wells (Ministry of Hydrocarbons and Energy, CNIH well list)",
+    probe: { field: "Margarita" },
+    agency: "Ministerio de Hidrocarburos y Energías (Bolivia) - Centro Nacional de Información Hidrocarburífera (CNIH) well list",
+    // Layer 4 of a web-map service; the provider finds the layer again only if the service keeps one layer, so check here first if it moves.
+    url: "https://services.arcgis.com/ZvJ7dOfEfexanMpI/arcgis/rest/services/Map_WFL1/FeatureServer/4",
+    pageMax: 2000,
+    idKind: "id",
+    idLabel: "well code (sigla, e.g. 'MGR-4ST1')",
+    extent: [-69.7, -23.0, -57.4, -9.6],
+    license: "No licence stated; published openly by the ministry on ArcGIS Online",
+    caveat:
+      "~2,100 wells drilled since the 1920s (spuds to mid-2025), with field, contract area, department, class (DESARROLLO, EXPLORATORIO, DE AGUA...), result (PRODUCTOR / NEGATIVO), drilling dates and measured depth in metres. No operator. status is the abandonment state where given, else the result; a status filter matches either ('ABANDONO' or 'PRODUCTOR'). The ministry first published this layer in November 2026 inside a web-map service (layer 4 of Map_WFL1), so its id may change if the map is republished.",
+    searchFields: {
+      api: "o_sigla",
+      well_name: "o_nombre_pozo",
+      field: "o_campo",
+      county: "o_departamento",
+      status: "o_resultados",
+      well_type: "o_clasificacion",
+    },
+    // status shows the abandonment state where given, else the result: the filter looks in both.
+    filterWhere: { status: async (text) => `(${likeClause("o_abandono", text)} OR ${likeClause("o_resultados", text)})` },
+    normalize: (a, g) => ({
+      api: a.o_sigla,
+      wellName: a.o_nombre_pozo,
+      operator: null,
+      status: a.o_abandono ?? a.o_resultados,
+      result: a.o_resultados,
+      wellType: a.o_clasificacion,
+      field: a.o_campo,
+      county: a.o_departamento,
+      province: a.o_provincia,
+      municipality: a.o_municipio,
+      contractArea: a.o_area_de_contrato,
+      basin: a.o_cuenca_provincia_de_interes_hi,
+      ...geomFirst(a, g, "latitud_wgs84", "longitud_wgs84"),
+      spudDate: msToIso(a.o_fecha_inicio_perforacion),
+      endDrillDate: msToIso(a.o_fecha_final_perforacion),
+      completionDate: msToIso(a.o_terminacion),
+      depthMD: nz(a.o_profundidad_md_m),
+      depthUnit: "m",
+      groundElevationM: nz(a.o_elevacion_msnm),
+      protectedArea: a.ap_nombres,
+      entityId: a.id_entidad,
     }),
   },
 ];

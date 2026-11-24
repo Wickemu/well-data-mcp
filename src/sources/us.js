@@ -3,11 +3,29 @@
 // in each comment is the last time it was. Adding a state = adding an entry here.
 // Federal offshore (BOEM) sources live in boem.js.
 
-import { msToIso, usDateToIso, isoDate, ymdToIso, coord, num, geomFirst, joinName, centroid } from "./normalize.js";
+import { msToIso, localMidnightToIso, usDateToIso, isoDate, ymdToIso, coord, num, geomFirst, joinName, centroid } from "./normalize.js";
 import { USER_AGENT } from "../meta.js";
 import { AASG_SOURCES } from "./us-geothermal.js";
+import { codedClause } from "../providers/arcgis.js";
+import {
+  CA_GEO_FIELDS, caGeoFieldWhere, CO_STATUS, CO_CLASS, KS_SYMBOL, ksStatusWhere, OH_WELL_TYP,
+  WV_COUNTIES, wvCountyWhere, wvDate, msWellName, trsLocation, urlOrNull, notSentinel, unknownToNull,
+} from "./us-codes.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
+
+// Words for North Dakota's commonest well_type codes, for the filter only (counted live
+// 2026-11-24). 'Gas' finds the gas wells (GASD, GASC, GASN), not the oil-and-gas OG wells.
+const ND_WELL_TYPE_WORDS = {
+  OG: "Oil",
+  GASD: "Gas",
+  GASC: "Gas",
+  GASN: "Gas",
+  SWD: "Salt water disposal",
+  WI: "Water injection",
+  ST: "Stratigraphic test",
+  CBM: "Coalbed methane",
+};
 
 const STATE_SOURCES = [
   // ------------------------------------------------------------------ West
@@ -19,6 +37,7 @@ const STATE_SOURCES = [
     agency: "CalGEM (WellSTAR)",
     url: "https://gis.conservation.ca.gov/server/rest/services/WellSTAR/Wells/MapServer/0",
     pageMax: 5000,
+    wellNumberField: "WellNumber",
     searchFields: {
       api: "API",
       well_name: "LeaseName",
@@ -40,6 +59,7 @@ const STATE_SOURCES = [
       longitude: coord(a, "Longitude", g, "x"),
       spudDate: usDateToIso(a.SpudDate),
       district: a.District,
+      legalLocation: trsLocation(a.Township, a.Range, a.Section, a.BaseMeridian),
       confidential: a.isConfidential,
     }),
   },
@@ -51,6 +71,11 @@ const STATE_SOURCES = [
     agency: "CalGEM (WellSTAR)",
     url: "https://gis.conservation.ca.gov/server/rest/services/WellSTAR/Wells/MapServer/1",
     pageMax: 5000,
+    caveat:
+      "field is CalGEM's 5-letter field code decoded to a name (fieldCode keeps the code; a field filter takes either). About 890 wells (a fifth, incl. plugged and active ones) have no coordinates, so wells_near cannot find them; legalLocation gives their township, range and section.",
+    wellNumberField: "WellNumber",
+    // FieldName holds codes (GEYSR, SNSEA): a field name typed finds its code.
+    filterWhere: { field: caGeoFieldWhere },
     searchFields: {
       api: "APINumber",
       well_name: "LeaseName",
@@ -66,10 +91,12 @@ const STATE_SOURCES = [
       operator: a.OperatorName,
       status: a.WellStatusDescription ?? a.WellStatus,
       wellType: a.WellType,
-      field: a.FieldName,
+      field: CA_GEO_FIELDS[String(a.FieldName ?? "").toUpperCase()] ?? (a.FieldName || null),
+      fieldCode: a.FieldName || null,
       county: a.CountyName,
       latitude: coord(a, "Lat83", g, "y"),
       longitude: coord(a, "Long83", g, "x"),
+      legalLocation: trsLocation(a.Township, a.Range, a.TownshipSection, a.BaseMeridian),
       // live layer types these as Integer and they are null on every row checked 2026-09-15;
       // usDateToIso handles either a US string or an epoch number if CalGEM starts filling them
       spudDate: usDateToIso(a.SpudDate),
@@ -249,12 +276,16 @@ const STATE_SOURCES = [
       county: a.county,
       latitude: coord(a, "latitude", g, "y"),
       longitude: coord(a, "longitude", g, "x"),
-      spudDate: msToIso(a.spud_date),
-      depthMD: a.measured_vertical_depth,
-      depthTVD: a.true_vertical_depth,
-      lastProductionDate: msToIso(a.last_production_date),
-      plugDate: msToIso(a.plug_date),
+      // Dates are stored at local midnight; a well without one carries 9999-12-31 (null here).
+      spudDate: localMidnightToIso(a.spud_date),
+      depthMD: nz(a.measured_vertical_depth), // 0 on ~59,000 wells that report no depth
+      depthTVD: nz(a.true_vertical_depth),
+      lastProductionDate: localMidnightToIso(a.last_production_date),
+      plugDate: localMidnightToIso(a.plug_date),
       directional: a.directional_status,
+      legalLocation: a.ulstr, // unit letter-section-township-range, 'K-10-18S-33E'
+      detailUrl: urlOrNull(a.details), // OCD well details page
+      wellFileUrl: urlOrNull(a.files), // OCD imaging: the scanned well file
     }),
   },
   {
@@ -263,12 +294,16 @@ const STATE_SOURCES = [
     label: "Colorado wells (API spots)",
     probe: { operator: "Chevron" },
     agency: "Colorado ECMC (via DNR GIS)",
-    // Field names re-verified against …/MapServer/0?f=json on 2026-10-23 (layer renamed from
-    // ECMC_Wells to Wells_Public_ECMC; COUNTY became County).
-    url: "https://gisdnr.state.co.us/arcgis/rest/services/ECMC_Public/Wells_Public_ECMC/MapServer/0",
+    // Re-verified against …/MapServer/0?f=json on 2026-11-12: ECMC moved its services to a
+    // second server instance (gisdnr1, folder Public; this is the layer its own "Public Map
+    // ECMC" uses). Field names are unchanged, but API now holds 8 undashed digits
+    // ('00905201'); the dashed county-sequence form the layer used to give is in API_Label.
+    url: "https://gisdnr.state.co.us/gisdnr1/rest/services/Public/Wells_ECMC_Public/MapServer/0",
     pageMax: 2000,
+    // ECMC status and class codes: shown as words, and a filter word finds its codes ('Producing' -> PR).
+    codes: { status: CO_STATUS, well_type: CO_CLASS },
     searchFields: {
-      api: "API",
+      api: "API_Label",
       well_name: "WellName",
       operator: "Operator",
       county: "County",
@@ -277,7 +312,7 @@ const STATE_SOURCES = [
       well_type: "well_class",
     },
     normalize: (a, g) => ({
-      api: a.API,
+      api: a.API_Label ?? a.API,
       wellName: a.WellName ?? a.well_name,
       operator: a.Operator,
       status: a.wellstat,
@@ -291,6 +326,8 @@ const STATE_SOURCES = [
       depthMD: a.max_m_depth || null,
       depthTVD: a.max_tv_depth || null,
       basin: a.BASIN ?? null,
+      groundElevationFt: nz(a.ground_elev),
+      detailUrl: urlOrNull(a.scout_card_public), // ECMC facility detail / scout card
     }),
   },
   {
@@ -303,6 +340,7 @@ const STATE_SOURCES = [
     pageMax: 2000,
     caveat:
       "Rich (operator, field, dates, depth) but a snapshot: the newest spud is January 2025, so recent wells and current status are missing - WY-LIVE has WOGCC's live list (name, status, type only). Status and class are WOGCC codes (status e.g. PA permanently abandoned, PR producing, SI shut-in, TA temporarily abandoned, SP spudded, AI active injector, DH dry hole).",
+    wellNumberField: "WN",
     searchFields: {
       api: "CAPINO",
       well_name: "UNIT_LEASE",
@@ -323,8 +361,11 @@ const STATE_SOURCES = [
       ...geomFirst(a, g, "LAT", "LON"),
       spudDate: ymdToIso(a.FIRSTSPUD),
       completionDate: ymdToIso(a.FIRSTCOMP),
-      statusDate: ymdToIso(a.STATUSDATE),
+      // ~160 rows carry a 2099 placeholder (20990909): later than anything real.
+      statusDate: Number(a.STATUSDATE) >= 20900101 ? null : ymdToIso(a.STATUSDATE),
       depthMD: nz(a.TD),
+      kbElevationFt: nz(a.ELEVKB),
+      groundElevationFt: nz(a.ELEV),
       basin: a.BASIN,
       bottomFormation: a.BOTFORM,
       horizontalOrDirectional: a.HORIZ_DIR,
@@ -343,6 +384,10 @@ const STATE_SOURCES = [
     typeName: "WY_SHPS:WELL",
     geometryName: "the_geom",
     sortBy: "PKey",
+    // GeoServer answers a first page in ~2 s without startIndex/sortBy and in 20-50 s with
+    // them (status and type filters). That page is in feature-id order, so a search uses it
+    // only when it holds the whole answer; a longer answer is paged sorted by PKey throughout.
+    unsortedFirstPage: true,
     pageMax: 2000,
     caveat: "Current but thin: no operator, county, field, dates or depth (those are in WY, as of January 2025).",
     searchFields: {
@@ -437,7 +482,7 @@ const STATE_SOURCES = [
     idKind: "id",
     idLabel: "IDWR well id",
     apiNumeric: true,
-    caveat: "Geothermal water wells (space heating, aquaculture, greenhouses...) with min/max water temperature; IDWR does not state the temperature unit (values suggest deg F). No operator or status.",
+    caveat: "Geothermal water wells (space heating, aquaculture, greenhouses...) with min/max water temperature in degrees Fahrenheit (the layer covers 85-212 deg F wells). No operator or status.",
     searchFields: {
       api: "WellID",
       well_name: "StationName",
@@ -455,6 +500,7 @@ const STATE_SOURCES = [
       maxWaterTemp: num(a.MaxWaterTemp),
       maxWaterTempDate: msToIso(a.MaxWaterTempDate),
       minWaterTemp: num(a.MinWaterTemp),
+      temperatureUnit: "F",
       discharge: num(a.Discharge),
     }),
   },
@@ -467,8 +513,10 @@ const STATE_SOURCES = [
     url: "https://gis.dogami.oregon.gov/arcgis/rest/services/Public/GTILO2/MapServer/0",
     pageMax: 1000,
     noPaging: true, // server 400s on resultOffset/resultRecordCount
+    // Gradient holes are often named only '1'; their DOGAMI id ('GP-012') is in OtherName.
+    wellNameAlso: "OtherName",
     caveat:
-      "DOGAMI's 2013 geothermal compilation (geothermal wells, gradient holes, some water wells): nothing drilled after about 2013. Max temperatures in the unit given by temperatureUnit. DOGAMI publishes no oil & gas well layer.",
+      "DOGAMI's 2013 geothermal compilation (geothermal wells, gradient holes, some water wells): nothing drilled after about 2013. Max temperatures in the unit given by temperatureUnit. Later geothermal permits are in OR-GEO-PERMITS, oil & gas permits in OR-OG.",
     searchFields: {
       api: "APINo",
       well_name: "WellName_",
@@ -490,11 +538,19 @@ const STATE_SOURCES = [
       spudDate: msToIso(a.SpudDate),
       endDrillDate: msToIso(a.EndedDrill),
       statusDate: msToIso(a.StatusDate),
-      depth: nz(a.DrillerTot),
+      otherName: a.OtherName || null,
+      // -999 marks a missing number throughout GTILO-2.
+      depth: notSentinel(a.DrillerTot) || null,
       depthUnit: a.LengthUnit,
-      maxTemperature: num(a.MaximumRec),
+      depthReference: a.DepthRefer || null,
+      kbElevation: notSentinel(a.ElevationK), // in depthUnit
+      groundElevation: notSentinel(a.ElevationG),
+      maxTemperature: notSentinel(a.MaximumRec),
       temperatureUnit: a.Temperatur,
-      headerUrl: a.HeaderURI,
+      temperatureDepth: notSentinel(a.DepthOfMea),
+      legalLocation: trsLocation(a.TWP, a.RGE, a.Section, a.PLSS_Merid),
+      headerUrl: urlOrNull(a.HeaderURI),
+      observationUrl: urlOrNull(a.Observatio),
     }),
   },
   {
@@ -607,22 +663,34 @@ const STATE_SOURCES = [
       well_name: "wellname",
       operator: "operator_",
       county: "county",
+      field: "geothermalareaname",
       status: "status",
       well_type: "welltype",
     },
+    caveat: "The older NGDS compilation of Nevada geothermal wells; NV-NBMG is NBMG's current database and differs on about a tenth of dates. Depths and elevations in metres.",
     normalize: (a, g) => ({
       api: a.apino,
       wellName: a.wellname,
       operator: a.operator_,
       status: a.status,
       wellType: a.welltype,
-      field: null,
+      function: a.function_,
+      field: a.geothermalareaname || null,
       county: a.county,
       latitude: coord(a, "latdegree", g, "y"),
       longitude: coord(a, "longdegree", g, "x"),
       spudDate: msToIso(a.spuddatetime),
+      endDrillDate: msToIso(a.enddrillingdatetime),
+      permitDate: msToIso(a.permitissdatetime),
+      depthMD: nz(a.drillertotaldepth_m),
+      depthTVD: nz(a.trueverticaldepth_m),
+      depthUnit: "m",
+      groundElevationM: nz(a.elevationgl_m),
+      kbElevationM: nz(a.elevationkb_m),
       thermalClass: a.thermalclass,
       permitNo: a.permitno,
+      lease: a.lease,
+      logs: a.logs,
     }),
   },
   {
@@ -690,8 +758,8 @@ const STATE_SOURCES = [
       field: a.field_name,
       county: a.county,
       stateName: a.state_,
-      latitude: coord(a, "latitude_wgs84", g, "y"),
-      longitude: coord(a, "longitude_wgs84", g, "x"),
+      // the attributes are rounded to 3 decimals (up to 70 m off); the geometry is exact
+      ...geomFirst(a, g, "latitude_wgs84", "longitude_wgs84"),
       permitNumber: a.permit_no,
       permitDate: isoDate(a.permit_issued_date),
       spudDate: isoDate(a.spud_date),
@@ -699,6 +767,8 @@ const STATE_SOURCES = [
       depthMD: nz(a.depth_total_m),
       depthTVD: nz(a.depth_vertical_m),
       depthUnit: "m",
+      groundElevationM: nz(a.elevation_gl_m),
+      kbElevationM: nz(a.elevation_kb_m),
       temperatureMaxC: a.temperature_max_measured_c > -999 ? a.temperature_max_measured_c : null,
       thermalClass: a.thermal_class,
       formationAtTD: a.formation_td,
@@ -714,6 +784,7 @@ const STATE_SOURCES = [
     url: "https://services1.arcgis.com/7HDiw78fcUiM2BWn/arcgis/rest/services/Well_Surface_Hole_Location/FeatureServer/0",
     pageMax: 2000,
     caveat: "Includes a few exploratory geothermal wells (field '*EXPLORATORY, GEOTHERMAL'). Depths in feet.",
+    countyIsArea: true, // GeographicArea is a basin ('COOK INLET BASIN'), not a borough
     searchFields: {
       api: "APINumber",
       well_name: "WellName",
@@ -801,9 +872,17 @@ const STATE_SOURCES = [
       plugDate: msToIso(a.Date_plug),
       permitDate: msToIso(a.Date_Issued),
       bottomFormation: a.Bottom_Hole_Formation,
-      wellFileUrl: a.Scanned_Well_File_URL,
-      recordUrl: a.DatabaseRecord_URL,
-      productionUrl: a.Production_URL,
+      permit: a.Permit,
+      legalLocation: a.Qsec_location,
+      kbElevationFt: nz(a.Kelly_Bushing_Elevation),
+      groundElevationFt: nz(a.Ground_Surface_Elevation),
+      // the URL fields hold text such as 'NO PRODUCTION DATA' where there is nothing to link
+      wellFileUrl: urlOrNull(a.Scanned_Well_File_URL),
+      elogsUrl: urlOrNull(a.Scanned_Elogs_URL),
+      recordUrl: urlOrNull(a.DatabaseRecord_URL),
+      productionUrl: urlOrNull(a.Production_URL),
+      injectionUrl: urlOrNull(a.InjectionData_URL),
+      corePhotosUrl: urlOrNull(a.core_pics_url),
     }),
   },
   {
@@ -816,6 +895,13 @@ const STATE_SOURCES = [
     // All_Wells is the keyless MapServer twin with the identical schema (verified 2026-10-06).
     url: "https://gis.dmr.nd.gov/dmrpublicservices/rest/services/All_Wells/MapServer/0",
     pageMax: 2000,
+    // NDIC codes: a contains-match would let 'A' find every 'PA' well.
+    codeFields: ["status", "well_type"],
+    // well_type also takes a word for the common codes ('Gas' finds GASD, GASC and GASN); the
+    // output keeps the codes.
+    filterWhere: { well_type: async (text) => codedClause("well_type", text, ND_WELL_TYPE_WORDS) },
+    caveat:
+      "status and well_type are NDIC codes and match exactly: status e.g. A (active), PA (plugged and abandoned), DRY, IA (inactive), TA (temporarily abandoned), LOC (permitted location), DRL (drilling), PNC (permit cancelled); well_type e.g. OG (oil and gas), SWD (salt water disposal), WI (water injection), GASD/GASC/GASN (gas), ST (stratigraphic test). well_type also takes the words Gas (GASD/GASC/GASN), Oil (OG), Disposal (SWD), Water injection (WI), Stratigraphic (ST) and Coalbed (CBM).",
     searchFields: {
       api: "api_no",
       well_name: "well_name",
@@ -856,18 +942,23 @@ const STATE_SOURCES = [
     },
     caveat:
       "TX RRC GIS carries only API number, well number, symbol and coordinates. For operator, lease, field and county use TX-RRC (same wells, RRC's wellbore query).",
-    normalize: (a, g) => ({
-      api: a.API,
-      wellName: a.GIS_WELL_NUMBER,
-      operator: null,
-      status: null,
-      wellType: a.GIS_SYMBOL_DESCRIPTION,
-      field: null,
-      county: null,
-      latitude: coord(a, "GIS_LAT83", g, "y"),
-      longitude: coord(a, "GIS_LONG83", g, "x"),
-      spudDate: null,
-    }),
+    normalize: (a, g) => {
+      // The layer stores county + sequence ('00304251'); shown as the full API, as TX-RRC does.
+      const cs = a.API ? String(a.API).padStart(8, "0") : null;
+      return {
+        api: cs ? `42-${cs.slice(0, 3)}-${cs.slice(3)}` : null,
+        apiCountySequence: a.API,
+        wellName: a.GIS_WELL_NUMBER,
+        operator: null,
+        status: null,
+        wellType: a.GIS_SYMBOL_DESCRIPTION,
+        field: null,
+        county: null,
+        latitude: coord(a, "GIS_LAT83", g, "y"),
+        longitude: coord(a, "GIS_LONG83", g, "x"),
+        spudDate: null,
+      };
+    },
   },
   {
     key: "TX-RRC",
@@ -921,7 +1012,11 @@ const STATE_SOURCES = [
     url: "https://gis.occ.ok.gov/server/rest/services/Hosted/RBDMS_WELLS/FeatureServer/2",
     pageMax: 2000,
     apiNumeric: true,
-    caveat: "No field, dates or depth in OCC's GIS layer; each record links to its well-records documents.",
+    caveat:
+      "No field, dates or depth in OCC's GIS layer; each record links to its well-records documents. status and well_type are OCC RBDMS codes and match exactly (status e.g. AC active, PA plugged and abandoned, OR orphan, TA temporarily abandoned; type e.g. OIL, GAS, DRY, SWD); a status word also matches the start of OCC's symbol class (statusClass: PLUGGED, ORPHAN, UIC, TEMPORARILY_ABANDONED...).",
+    wellNumberField: "well_num",
+    codeFields: ["status", "well_type"],
+    codeAlso: { status: "symbol_class" },
     searchFields: {
       api: "api",
       well_name: "well_name",
@@ -935,6 +1030,7 @@ const STATE_SOURCES = [
       wellName: joinName(a.well_name, a.well_num),
       operator: a.operator,
       status: a.wellstatus,
+      statusClass: a.symbol_class,
       wellType: a.welltype,
       county: a.county,
       ...geomFirst(a, g, "sh_lat", "sh_lon"),
@@ -949,23 +1045,29 @@ const STATE_SOURCES = [
     agency: "Kansas Geological Survey (KCC well data)",
     url: "https://services2.arcgis.com/ZOdjAzAQ2B0f85zi/arcgis/rest/services/Oil_and_Gas_Wells/FeatureServer/0",
     pageMax: 2000,
-    caveat: "The operator filter matches the original operator; operator in results shows the current operator when KGS has one.",
+    caveat:
+      "The operator filter matches the original operator; operator in results shows the current operator when KGS has one. status is the KCC status ('Plugged and Abandoned', 'Producing'); symbol is KGS's map class (symbolCode, e.g. OIL-P&A), which a status filter also matches. Elevations in feet.",
+    wellNumberField: "WELL_NAME",
+    // The layer's own aliases: WELL_CLASS is the status, STATUS the map class ('Well Type').
     searchFields: {
       api: "API_NUMBER",
       well_name: "LEASE_NAME",
       operator: "OPERATOR_NAME",
       county: "COUNTY",
       field: "FIELD_NAME",
-      status: "STATUS",
-      well_type: "WELL_CLASS",
+      status: "WELL_CLASS",
+      well_type: "WELL_TYPE",
     },
+    filterWhere: { status: ksStatusWhere },
     normalize: (a, g) => ({
       api: a.API_NUMBER,
       wellName: joinName(a.LEASE_NAME, a.WELL_NAME),
       operator: a.CURR_OPERATOR || a.OPERATOR_NAME,
       originalOperator: a.OPERATOR_NAME,
-      status: a.STATUS,
-      wellType: a.WELL_CLASS || a.WELL_TYPE,
+      status: a.WELL_CLASS || KS_SYMBOL[a.STATUS] || a.STATUS || null,
+      wellType: a.WELL_TYPE || null,
+      symbol: KS_SYMBOL[a.STATUS] ?? a.STATUS ?? null,
+      symbolCode: a.STATUS || null,
       field: a.FIELD_NAME,
       county: a.COUNTY,
       ...geomFirst(a, g), // NAD27_* attributes are NAD27
@@ -974,6 +1076,9 @@ const STATE_SOURCES = [
       completionDate: msToIso(a.COMPLETION_DATE),
       plugDate: msToIso(a.PLUG_DATE),
       depthMD: nz(a.ROTARY_TOTAL_DEPTH),
+      kbElevationFt: nz(a.ELEVATION_KB),
+      groundElevationFt: nz(a.ELEVATION_GL),
+      dfElevationFt: nz(a.ELEVATION_DF),
       producingFormation: a.PRODUCING_FORMATION,
       ipOil: num(a.IP_OIL),
       ipGas: num(a.IP_GAS),
@@ -1015,6 +1120,7 @@ const STATE_SOURCES = [
     agency: "Missouri DNR / Missouri Geological Survey",
     url: "https://gis.dnr.mo.gov/host/rest/services/geology/oil_gas_wells/MapServer/0",
     pageMax: 2000,
+    wellNumberField: "WELL_NAME",
     searchFields: {
       api: "API_NUMBER",
       well_name: "LEASE",
@@ -1037,8 +1143,11 @@ const STATE_SOURCES = [
       permitDate: msToIso(a.PERMIT_DAT),
       statusDate: msToIso(a.STATUSDATE),
       depthMD: nz(a.TOTAL_DPTH),
+      elevationFt: nz(a.ELEVATION),
       formation: a.FORMATION,
-      permitUrl: a.PERMIT_LINK,
+      permitUrl: urlOrNull(a.PERMIT_LINK),
+      wellLogUrl: urlOrNull(a.DOWN_LINK),
+      stripLogUrl: /nolog\.pdf$/i.test(a.STRAT_LINK ?? "") ? null : urlOrNull(a.STRAT_LINK), // nolog.pdf = no strip log
     }),
   },
   {
@@ -1051,6 +1160,7 @@ const STATE_SOURCES = [
     pageMax: 500,
     dedupeBy: "wellid", // the layer repeats rows per well
     caveat: "Dry holes are largely missing from this layer.",
+    wellNumberField: "wellnumber",
     searchFields: {
       api: "wellid",
       well_name: "wellname",
@@ -1089,6 +1199,7 @@ const STATE_SOURCES = [
     outFields:
       "WELL_SERIAL_NUM,API_NUM,WELL_NAME,WELL_NUM,ORG_OPER_NAME,WELL_STATUS_CODE,LEGEND_DESC,PRODUCT_TYPE_CODE,WELL_CLASS_TYPE_CODE,FIELD_NAME,PARISH_NAME,SURFACE_LAT_DEC_DEG,SURFACE_LONG_DEC_DEG,PERMIT_DATE,SPUD_DATE,ORIGINAL_COMPLETION_DATE,WELL_STATUS_DATE,MEASURED_DEPTH,TRUE_VERTICAL_DEPTH,SANDS,FORMATIONS,HYPERLINK,LEASE_NUM",
     caveat: "Some old wells carry API '00000000000000'; their serialNumber is the reliable key.",
+    wellNumberField: "WELL_NUM",
     searchFields: {
       api: "API_NUM",
       well_name: "WELL_NAME",
@@ -1116,6 +1227,7 @@ const STATE_SOURCES = [
       statusDate: msToIso(a.WELL_STATUS_DATE),
       depthMD: nz(a.MEASURED_DEPTH),
       depthTVD: nz(a.TRUE_VERTICAL_DEPTH),
+      lease: a.LEASE_NUM,
       sands: a.SANDS,
       formations: a.FORMATIONS,
       detailUrl: a.HYPERLINK,
@@ -1144,8 +1256,8 @@ const STATE_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.API,
-      // DispName is 'LEASE  WELLNO ... API'; drop the trailing API number
-      wellName: a.DispName && a.API ? a.DispName.replace(new RegExp(`\\s*${a.API}$`), "") : a.DispName,
+      // DispName is 'LEASE  WELLNO WELLNO API' on most rows: drop the API and the repeated number
+      wellName: msWellName(a.DispName, a.API),
       operator: null,
       status: a.statdesc,
       wellType: a.typedesc,
@@ -1191,6 +1303,9 @@ const STATE_SOURCES = [
       statusDate: msToIso(a.StatusDate),
       depthMD: nz(a.MD) ?? nz(a.DTD),
       depthTVD: nz(a.TVD),
+      kbElevationFt: nz(a.KB),
+      groundElevationFt: nz(a.GR),
+      dfElevationFt: nz(a.DF),
       pool: a.PoolName,
       permit: a.Permit,
     }),
@@ -1232,20 +1347,33 @@ const STATE_SOURCES = [
       depthMD: nz(a.MD),
       depthTVD: nz(a.TVD),
       bhtF: num(a.BHT_DEG_F),
+      dfElevationFt: nz(a.DERRICK_ELEV), // derrick floor
+      groundElevationFt: nz(a.GRND_ELEV),
+      wellLogs: a.WELL_LOGS,
+      perforations: a.PERFS_OPEN_INTERVAL,
+      bottomHoleLocation: a.BHL, // footages from the section lines
       documentsUrl: a.DOCUMENTS,
     }),
   },
 
   // ------------------------------------------------- Appalachia / Midwest
-  {
-    key: "PA",
+  // Pennsylvania: DEP's eMapPA service, one layer for conventional wells and one for
+  // unconventional (shale) wells, same fields. Verified 2026-11-12, after the former
+  // OilGas_Collector well layer was stopped. The Extraction service carries the same two
+  // layers, so it is the fallback when eMapPA_External is stopped.
+  ...[
+    { key: "PA", layer: 84, extraction: 54, label: "Pennsylvania oil & gas wells - conventional", probe: { operator: "Diversified" } },
+    { key: "PA-UNC", layer: 83, extraction: 53, label: "Pennsylvania oil & gas wells - unconventional (Marcellus, Utica...)", probe: { operator: "EQT" } },
+  ].map(({ key, layer, extraction, label, probe }) => ({
+    key,
     state: "PA",
-    label: "Pennsylvania oil & gas wells",
-    probe: { operator: "EQT" },
+    label,
+    probe,
     agency: "Pennsylvania DEP Office of Oil and Gas Management",
-    url: "https://gis.dep.pa.gov/depgisprd/rest/services/OilGas_Collector/OG_Layers_OG_Well_Data/MapServer/0",
+    url: `https://gis.dep.pa.gov/depgisprd/rest/services/emappa/eMapPA_External/MapServer/${layer}`,
+    fallbackUrl: `https://gis.dep.pa.gov/depgisprd/rest/services/emappa/eMapPA_External_Extraction/MapServer/${extraction}`,
     pageMax: 1000,
-    caveat: "No depth or formation values (the fields exist but are blank).",
+    caveat: "No depth or formation fields. Conventional wells are in PA, unconventional (shale) wells in PA-UNC; a search with state=PA asks both. A few old permits carry placeholder numbers.",
     searchFields: {
       api: "PERMIT_NUMBER",
       well_name: "WELL_NAME",
@@ -1266,12 +1394,13 @@ const STATE_SOURCES = [
       permitDate: msToIso(a.PERMIT_DATE),
       spudDate: msToIso(a.SPUD_DATE),
       plugDate: msToIso(a.DATE_PLUGGED),
+      groundElevationFt: nz(a.SURFACE_ELEVATION),
       unconventional: a.UNCONVENTIONAL_IND,
       configuration: a.WELL_CONFIG_CODE,
       padName: a.WELL_PAD_NAME,
       storageField: a.STORAGE_FIELD_NAME,
     }),
-  },
+  })),
   {
     key: "OH",
     state: "OH",
@@ -1280,6 +1409,8 @@ const STATE_SOURCES = [
     agency: "Ohio DNR Division of Oil & Gas Resources",
     url: "https://services5.arcgis.com/ajRlmtxbNBjZggOT/arcgis/rest/services/Oil_And_Gas_Wells/FeatureServer/3",
     pageMax: 2000,
+    codes: { well_type: OH_WELL_TYP }, // the layer's coded-value domain
+    caveat: "wellCardFile is the well card's path inside ODNR's well-card store, which has no public base address; symbol is ODNR's map class ('Plugged gas', 'Dry hole').",
     searchFields: {
       api: "API_NO",
       well_name: "WELL_NAME",
@@ -1296,20 +1427,26 @@ const STATE_SOURCES = [
       operator: a.COMPANY_NAME,
       status: a.WELL_STATUS_DESCRIPTION,
       wellType: a.WELL_TYP,
+      symbol: a.MAPSYMBOL_DESCRIPTION,
       county: a.COUNTY,
       township: a.TOWNSHIP,
       ...geomFirst(a, g, "LAT83", "LONG83"),
+      bottomHoleLatitude: nz(a.BH_LAT83),
+      bottomHoleLongitude: nz(a.BH_LONG83),
       permitDate: msToIso(a.PERMIT_ISSUED_DATE),
       completionDate: msToIso(a.COMP_DATE),
       plugDate: msToIso(a.PLUG_DATE),
       depthMD: nz(a.TOTAL_DEPTH),
+      groundElevationFt: nz(a.ELEV_GR),
       producingFormation: a.PRODFM1,
       deepestFormation: a.DEEPEST_FORMATION,
       slant: a.SLANT,
       ipOil: num(a.IP_OIL),
       ipGas: num(a.IP_GAS),
       lastProductionYear: a.Last_Nonzero_Production_Year,
-      documentsUrl: a.PDF_LINK,
+      // PDF_LINK is 'nowellcard.htm' or a relative path ('001\\34001200010000.pdf'), not a URL
+      documentsUrl: urlOrNull(a.PDF_LINK),
+      wellCardFile: a.PDF_LINK && !/^https?:|nowellcard/i.test(a.PDF_LINK) ? a.PDF_LINK.replace(/\\/g, "/") : null,
     }),
   },
   {
@@ -1320,7 +1457,10 @@ const STATE_SOURCES = [
     agency: "West Virginia DEP Office of Oil and Gas",
     url: "https://tagis.dep.wv.gov/arcgis/rest/services/WVDEP_enterprise/oil_gas/MapServer/7",
     pageMax: 2000,
-    caveat: "issueDate/completionDate belong to the latest permit action on the well, which may be a plugging permit. depthClass is a category, not a number.",
+    caveat:
+      "issueDate/completionDate belong to the latest permit action on the well, which may be a plugging permit. depthClass is a category, not a number. county is stored as a FIPS code (countyCode); a county filter takes the name or the code.",
+    wellNumberField: "wellnumber",
+    filterWhere: { county: wvCountyWhere },
     searchFields: {
       api: "api",
       well_name: "farmname",
@@ -1336,10 +1476,11 @@ const STATE_SOURCES = [
       status: a.wellstatus,
       wellType: a.welltype,
       wellUse: a.welluse,
-      county: a.county,
+      county: WV_COUNTIES[a.county] ?? a.county,
+      countyCode: a.county,
       ...geomFirst(a, g),
-      issueDate: isoDate(a.issuedate),
-      completionDate: isoDate(a.compdate),
+      issueDate: wvDate(a.issuedate),
+      completionDate: wvDate(a.compdate),
       depthClass: a.welldepth,
       formation: a.formation,
       marcellus: a.marcellus,
@@ -1357,6 +1498,7 @@ const STATE_SOURCES = [
     pageMax: 2000,
     baseWhere: "bogus_location = 0", // ~32k records sit at 0,0
     caveat: "About a quarter of records have no API number; recordNumber is KGS's key for those. Records without a valid location are excluded.",
+    wellNumberField: "well_number",
     searchFields: {
       api: "API_Number",
       well_name: "farm_name",
@@ -1382,6 +1524,9 @@ const STATE_SOURCES = [
       permitDate: msToIso(a.date_permit_issued),
       depthMD: nz(a.total_depth),
       depthTVD: nz(a.true_vertical_depth),
+      pbtd: nz(a.PBTD),
+      groundElevationFt: nz(a.surface_elevation),
+      permit: a.permit?.trim() || null,
       tdFormation: a.tdfm_name,
       deepestPay: a.deepest_pay_name,
     }),
@@ -1395,6 +1540,7 @@ const STATE_SOURCES = [
     url: "https://maps.isgs.illinois.edu/arcgis/rest/services/ILOIL/Wells/MapServer/8",
     pageMax: 2000,
     caveat: "No county or field name fields; no spud date.",
+    wellNumberField: "FARM_NUM",
     searchFields: {
       api: "API_NUMBER",
       well_name: "FARM_NAME",
@@ -1410,6 +1556,10 @@ const STATE_SOURCES = [
       completionDate: msToIso(a.COMP_DATE),
       permitDate: msToIso(a.PERMIT_DATE),
       depthMD: nz(a.TOTAL_DEPTH),
+      elevationFt: nz(a.ELEVATION),
+      elevationRef: a.EREF_DEF, // 'Kelly Bushing', 'Ground Level'...
+      permit: a.PERMIT_NUMBER,
+      logs: a.LOGS,
       tdFormation: a.TDFMTEXT,
       summaryUrl: a.DataSummary,
     }),
@@ -1425,6 +1575,7 @@ const STATE_SOURCES = [
     idKind: "id",
     idLabel: "Indiana permit number",
     caveat: "No API number, well type, dates or depth in this layer.",
+    wellNumberField: "well_number",
     searchFields: {
       api: "permit_number",
       well_name: "lease_name",
@@ -1475,6 +1626,10 @@ const STATE_SOURCES = [
       plugDate: msToIso(a.PluggingDate),
       depthMD: nz(a.DTD),
       depthTVD: nz(a.TVD),
+      elevationFt: nz(a.ReferenceElevation),
+      elevationRef: a.ReferenceTops, // the datum of the tops: K (kelly bushing), G (ground)...
+      permitNumber: a.PermitNumber, // Michigan wells are cited by permit number
+      sidetrack: a.Sidetrack,
       producingFormation: a.ProducingFormation,
       slant: a.Slant,
     }),
@@ -1487,6 +1642,12 @@ const STATE_SOURCES = [
     agency: "New York DEC Division of Mineral Resources",
     url: "https://gisservices.dec.ny.gov/arcgis/rest/services/mines_and_wells/MapServer/1",
     pageMax: 1000,
+    // DEC two-letter codes, matched exactly ('PA' must not find 'UPA'); a word matches the
+    // start of the general status / type ('Plugged' -> 'Plugged Well', not 'Unplugged Well').
+    codeFields: ["status", "well_type"],
+    codeAlso: { status: "GENERALWELLSTATUS", well_type: "GENERALWELLTYPE" },
+    caveat:
+      "status and well_type are DEC codes (status e.g. AC, PA, IN; type e.g. OD oil, GD gas, ST storage) and match exactly; generalStatus (Plugged Well, Unplugged Well, Not Drilled) and generalType (Oil Well, Gas Well, Storage Well...) match a word at their start. Elevation in feet.",
     searchFields: {
       api: "API_WELLNO",
       well_name: "WELL_NAME",
@@ -1513,6 +1674,13 @@ const STATE_SOURCES = [
       plugDate: msToIso(a.DATE_WELL_PLUGGED),
       depthMD: nz(a.MEASURED_DEPTH),
       depthTVD: nz(a.TRUE_VERTICAL_DEPTH),
+      tdDate: msToIso(a.DATE_TOTAL_DEPTH),
+      kickoffDepth: nz(a.KICKOFF),
+      sidetrack: a.SIDETRCK,
+      bottomHoleLatitude: nz(a.BOTTOM_HOLE_LATITUDE),
+      bottomHoleLongitude: nz(a.BOTTOM_HOLE_LONGITUDE),
+      elevationFt: nz(a.ELEVATION),
+      objectiveFormation: a.OBJECTIVE_FORMATION,
       producingFormation: a.PRODUCING_FORMATION,
       detailUrl: a.LINK,
     }),
@@ -1543,21 +1711,34 @@ const STATE_SOURCES = [
       county: a.COUNTY,
       ...geomFirst(a, g, "LATITUDE", "LONGITUDE"),
       permitDate: msToIso(a.PERMIT_DATE),
+      elevationFt: nz(a.ELEVATION),
       permit: a.PERMIT_NO,
       tdFormation: a.FORMATION_AT_TOTAL_DEPTH,
     }),
   },
-  {
-    key: "VA",
+  // Virginia DGO: one service, a layer per well state with the same fields (verified
+  // 2026-11-24: 0 Active Wells, 4 Permitted Undrilled Wells, 5 Plugged Wells). The plugged
+  // and undrilled layers have no completion date or total depth; some plugged rows have no
+  // position.
+  ...[
+    { key: "VA", layer: 0, label: "Virginia gas & oil wells (active)", probe: { operator: "Diversified" } },
+    { key: "VA-PLUGGED", layer: 5, label: "Virginia gas & oil wells - plugged and released", probe: { county: "Rockingham" } },
+    { key: "VA-UNDRILLED", layer: 4, label: "Virginia gas & oil wells - permitted, not drilled", probe: { county: "Buchanan" } },
+  ].map(({ key, layer, label, probe }) => ({
+    key,
     state: "VA",
-    label: "Virginia gas & oil wells (active)",
-    probe: { operator: "Diversified" },
+    label,
+    probe,
     agency: "Virginia Energy, Division of Gas and Oil",
-    url: "https://energy.virginia.gov/gis/rest/services/DGO/DGO_wells/MapServer/0",
+    url: `https://energy.virginia.gov/gis/rest/services/DGO/DGO_wells/MapServer/${layer}`,
     pageMax: 2000,
     idKind: "id",
     idLabel: "DGO file number",
-    caveat: "Active wells only (plugged wells are a separate DGO layer); identified by DGO file number, not API.",
+    // FiFarm is empty on about a quarter of the wells (three quarters of the undrilled ones);
+    // FiOperation, the operator's own designation, is always filled.
+    wellNameAlso: "FiOperation",
+    caveat:
+      "Identified by DGO file number, not API. wellName is the farm name, or the operator's well designation (operatorWellId) where there is none; a name search looks in both. Active wells are in VA, plugged and released ones in VA-PLUGGED, permitted wells not yet drilled in VA-UNDRILLED; a search with state=VA asks all of them and VA-HIST (historic wells). Elevation in feet.",
     searchFields: {
       api: "FiNo",
       well_name: "FiFarm",
@@ -1568,7 +1749,8 @@ const STATE_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.FiNo,
-      wellName: a.FiFarm,
+      wellName: a.FiFarm || a.FiOperation,
+      operatorWellId: a.FiOperation, // the operator's own designation ('P-176', 'FITZWATER 2')
       operator: a.CoName,
       status: a.TblPsDesc,
       wellType: a.TblOpDesc,
@@ -1578,8 +1760,9 @@ const STATE_SOURCES = [
       completionDate: msToIso(a.FiWellComp),
       statusDate: msToIso(a.FiStatDt),
       depthMD: nz(a.TotalDepth),
+      elevationFt: nz(a.FiElev),
     }),
-  },
+  })),
   {
     key: "VA-HIST",
     state: "VA",
@@ -1590,7 +1773,7 @@ const STATE_SOURCES = [
     url: "https://energy.virginia.gov/gis/rest/services/DGMR/Geothermal/FeatureServer/8",
     pageMax: 2000,
     caveat:
-      "Historic wells incl. plugged and abandoned ones, compiled for the National Geothermal Data System (VA lists active wells only). Depths in metres. lithologyLogUrl links a scanned log where one exists.",
+      "Historic wells incl. plugged and abandoned ones, compiled for the National Geothermal Data System (DGO's current lists are VA, VA-PLUGGED and VA-UNDRILLED). Most wells have no API number; wellName is the DGMR file number. Depths and elevations in metres. lithologyLogUrl links a scanned log where one exists.",
     searchFields: {
       api: "API_Number",
       well_name: "Well",
@@ -1600,12 +1783,13 @@ const STATE_SOURCES = [
       well_type: "WellType",
     },
     normalize: (a, g) => ({
-      api: a.API_Number,
-      wellName: a.Well,
-      operator: a.Operator,
-      status: a.Status,
-      wellType: a.WellType,
-      function: a.Function_,
+      // 'Unknown' on most rows: without a number the well is told apart by its file number
+      api: /\d/.test(a.API_Number ?? "") ? a.API_Number : null,
+      wellName: a.Well, // the DGMR file number ('LE-0008'), the only name the layer has
+      operator: unknownToNull(a.Operator),
+      status: unknownToNull(a.Status),
+      wellType: unknownToNull(a.WellType),
+      function: unknownToNull(a.Function_),
       county: a.County,
       latitude: coord(a, "Latitude", g, "y"),
       longitude: coord(a, "Longitude", g, "x"),
@@ -1613,9 +1797,12 @@ const STATE_SOURCES = [
       statusDate: msToIso(a.StatusDate),
       depthMD: nz(a.DrillerTotalDepth_m),
       depthUnit: "m",
-      formationAtTD: a.Formation_at_TD,
-      commodity: a.CommodityOfInterest,
-      lithologyLogUrl: a.Lithology_Log,
+      groundElevationM: nz(a.ElevationGL_m),
+      formationAtTD: unknownToNull(a.Formation_at_TD),
+      mineralOwner: unknownToNull(a.MineralOwner),
+      commodity: unknownToNull(a.CommodityOfInterest),
+      lithologyLogUrl: urlOrNull(a.Lithology_Log),
+      geophysicalLogUrl: urlOrNull(a.Geophysical_Log),
     }),
   },
 ];

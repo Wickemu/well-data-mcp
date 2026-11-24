@@ -8,12 +8,13 @@
 import { fetchJson } from "../http.js";
 import { containsWords } from "./snapshot.js";
 import { radiusToBbox } from "../geo.js";
+import { cachedValue } from "../disk-cache.js";
 
 const API = "https://fracfocus.org/api/api";
 const OPERATOR_TTL_MS = 12 * 3600_000;
 const MAX_OPERATOR_NAMES = 20; // an operator filter matching more names asks about the first 20
 
-let operatorCache = null; // { at, names }
+let operators = null; // FracFocus's operator names, kept in memory and on disk (src/disk-cache.js)
 
 // Asked for application/json, the API answers with the JSON encoded a second time as a string.
 async function ffJson(path, params, source) {
@@ -21,11 +22,13 @@ async function ffJson(path, params, source) {
   return typeof data === "string" ? JSON.parse(data) : data;
 }
 
-async function operatorNames(source) {
-  if (operatorCache && Date.now() - operatorCache.at < OPERATOR_TTL_MS) return operatorCache.names;
-  const list = await ffJson("operator/operators", undefined, source);
-  operatorCache = { at: Date.now(), names: list.map((o) => o.OperatorName).filter(Boolean) };
-  return operatorCache.names;
+function operatorNames(source) {
+  operators ??= cachedValue(
+    "fracfocus-operators",
+    async () => (await ffJson("operator/operators", undefined, source)).map((o) => o.OperatorName).filter(Boolean),
+    { ttlMs: OPERATOR_TTL_MS }
+  );
+  return operators.get();
 }
 
 /** The digits FracFocus accepts: 14 or 10 (an API-12 drops its sidetrack digits); else null. */
@@ -72,6 +75,7 @@ async function searchPage(source, params, pageSize) {
 
 export const fracFocusProvider = {
   canRaw: () => false,
+  warm: (source) => operatorNames(source), // keep the operator list fresh in a long-running server
 
   async search(source, filters, { limit, offset = 0, near = null }) {
     const want = offset + limit;
