@@ -1,10 +1,50 @@
 // Europe, including overseas France. Every endpoint and field name below was verified
 // against a live response on 2026-10-06.
 
-import { msToIso, isoDate, dmyToIso, namedDateToIso, num, looseNum, geomFirst } from "./normalize.js";
+import { msToIso, localMidnightToIso, isoDate, dmyToIso, namedDateToIso, num, looseNum, geomFirst } from "./normalize.js";
 import { fetchJson } from "../http.js";
+import { eovToWgs84 } from "../eov.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
+
+// Greenland (GL-GEUS): GEUS's layer of every Greenland drillhole (~4,800, mostly mineral),
+// fetched whole (3.5 MB) and cut to the oil and gas ones. Filtering on the server instead
+// (a FES filter on purpose_hidden) silently drops the 11 North-East Greenland cores.
+const GEUS_OWS = "https://data.geus.dk/geusmap/ows/4326.jsp";
+// GEUS gives the summary-sheet link with the name unencoded ('GANK#1', '79N12W/12 SC1'): encode it.
+const geusSheetUrl = (report) => {
+  const m = /^(.*[?&]iWellName=)(.*)$/.exec(report ?? "");
+  return m ? m[1] + encodeURIComponent(m[2]) : report || null;
+};
+const deeperOf = (a, b) => (Math.abs(num(a) ?? 0) >= Math.abs(num(b) ?? 0) ? a : b);
+/** One record per drillhole: GEUS lists a well cored in several runs once per run. */
+function mergeCoreRuns(x, y) {
+  const a = { ...x.attrs };
+  for (const [k, v] of Object.entries(y.attrs)) if ((a[k] == null || a[k] === "") && v !== "") a[k] = v;
+  const starts = [x.attrs.start_date, y.attrs.start_date].filter(Boolean).sort();
+  const ends = [x.attrs.end_date, y.attrs.end_date].filter(Boolean).sort();
+  a.start_date = starts[0] ?? "";
+  a.end_date = ends.at(-1) ?? "";
+  a.depth_to = deeperOf(x.attrs.depth_to, y.attrs.depth_to);
+  return { attrs: a, geometry: x.geometry ?? y.geometry };
+}
+async function loadGreenlandWells() {
+  const data = await fetchJson(GEUS_OWS, {
+    params: { service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: "ms:totalcore", outputFormat: "geojson", srsName: "urn:ogc:def:crs:EPSG::4326", count: "20000" },
+    timeoutMs: 60_000,
+  });
+  const byId = new Map();
+  for (const f of data.features ?? []) {
+    const a = f.properties ?? {};
+    if (a.purpose_hidden !== "Oil and Gas Exploration") continue;
+    const [x, y] = f.geometry?.coordinates ?? [];
+    const row = { attrs: a, geometry: Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null };
+    const id = a.id_hidden || a.drillhole_identifer;
+    byId.set(id, byId.has(id) ? mergeCoreRuns(byId.get(id), row) : row);
+  }
+  if (!byId.size) throw new Error("GEUS ms:totalcore: no oil and gas drillholes in the response");
+  return [...byId.values()];
+}
 
 /**
  * Every feature of a geo.admin.ch (swisstopo) layer, via the identify service over the
@@ -38,12 +78,19 @@ async function geoAdminLayer(layer) {
   }
 }
 
-/** swisstopo writes unknown values as '-', ' -' or 'No data' (numbers like '~327.5' go through looseNum). */
-const swissText = (v) => (v == null || /^\s*-?\s*$/.test(String(v)) || v === "No data" ? null : v);
+/** swisstopo writes unknown values as '-', ' -' or 'No data' / 'no data' (numbers like '~327.5' go through looseNum). */
+export const swissText = (v) => (v == null || /^\s*-?\s*$/.test(String(v)) || /^no data$/i.test(String(v).trim()) ? null : v);
 // ŠGÚDŠ stores missing text as the literal string '<Null>'.
 const skText = (v) => (v == null || v === "<Null>" || String(v).trim() === "" ? null : v);
-// GSNI drilling dates are 'ddmmyyyy' strings.
-const ddmmyyyy = (v) => (/^\d{8}$/.test(String(v ?? "")) ? dmyToIso(`${v.slice(0, 2)}.${v.slice(2, 4)}.${v.slice(4)}`) : null);
+// ŠGÚDŠ geothermal wells without a registration number carry 'bez RČ' ("no reg. no.") in that field.
+export const skRegNo = (v) => (/^bez\s*R[ČC]\.?$/i.test(String(skText(v) ?? "").trim()) ? null : skText(v));
+// GSNI drilling dates are 'ddmmyyyy' strings; ~3,500 give only 'mmyyyy' or 'yyyy'.
+export const ddmmyyyy = (v) => (/^\d{8}$/.test(String(v ?? "").trim()) ? dmyToIso(`${String(v).trim().slice(0, 2)}.${String(v).trim().slice(2, 4)}.${String(v).trim().slice(4)}`) : null);
+export const gsniYear = (v) => Number(/^(?:\d{2}|\d{4})?((?:1[89]|20)\d\d)$/.exec(String(v ?? "").trim())?.[1]) || null;
+// NSTA writes 'No Data Available' where a value is unknown.
+export const nsta = (v) => (v == null || /^no data available$/i.test(String(v).trim()) ? null : v);
+// Irish well dates: long form ('Wednesday, April 25, 2001') or day first ('03/05/2006').
+export const ieDate = (v) => namedDateToIso(v) ?? dmyToIso(v);
 const yearOf = (...vs) => Number(vs.map((v) => /\b(1[89]|20)\d\d\b/.exec(String(v ?? ""))?.[0]).find(Boolean)) || null;
 
 // Orkustofnun's one-letter purpose codes (idtilgangur) for the common geothermal classes.
@@ -55,6 +102,115 @@ const ICELAND_PURPOSE = {
   R: "Power plant research",
   A: "Other",
 };
+
+// BoreholeML codelists (BGR, v2.1, 2025-04-25): drilling purpose and borehole status.
+export const BGR_PURPOSE = {
+  AUD: "Brownfields, environment, landfill",
+  BOD: "Pedological survey", // not "soil": a filter word matches inside labels, and "oil" must not find it
+  EE: "Energy resources (oil, gas, coal)",
+  EM: "Ores and industrial minerals",
+  G: "Geological survey",
+  GC: "Geochemical survey",
+  GTE: "Geotechnical investigation",
+  GTH: "Geothermal energy",
+  GY: "Geophysical survey",
+  HY: "Hydrogeology, water management",
+  RO: "Raw materials exploration and extraction",
+  SE: "Aggregates and building stone",
+  SO: "Other purpose",
+  UG: "Underground storage",
+  UN: "Unknown",
+};
+export const BGR_STATUS = {
+  pla: "Planned",
+  ag: "Filed",
+  bo: "Drilled",
+  bon: "Drilled, no casing", // not "not completed": "completed" must find only au
+  zbo: "Drilling",
+  uf: "Unfinished",
+  au: "Completed (cased)",
+  f: "Performance test",
+  w: "Maintenance",
+  r: "Regeneration",
+  ti: "Deepened",
+  aw: "Widened",
+  ueb: "Overdrilling, reaming",
+  sa: "Workover",
+  rei: "Cleaned",
+  an: "Casing replaced",
+  atn: "Casing partly replaced",
+  bin: "Well installation renewed",
+  bsn: "Well chamber renewed",
+  akn: "Well cap replaced",
+  vw: "Abandoning",
+  rb: "Being removed",
+  rg: "Removed",
+  rgt: "Partly removed",
+  v: "Being backfilled",
+  vf: "Backfilled (plugged)",
+  vft: "Partly backfilled",
+  ng: "Not used",
+  af: "Abandoned",
+  aft: "Abandoned, dry",
+  afw: "Abandoned, too little water",
+  afq: "Abandoned, poor water quality",
+  ka: "Unknown",
+};
+
+/**
+ * GEUS's geothermal layer has one row per report: merge them into one record per well,
+ * keeping every report's title and link.
+ */
+export function geusGeothermalWells(features) {
+  const by = new Map();
+  for (const f of features ?? []) {
+    const p = f.properties ?? {};
+    const name = String(p.title ?? "").trim();
+    if (!name) continue;
+    let row = by.get(name);
+    if (!row) {
+      const [x, y] = f.geometry?.coordinates ?? [];
+      row = { attrs: { name, summary_sheet: p.summary_sheet || null, reports: [] }, geometry: Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null };
+      by.set(name, row);
+    }
+    if (p.report) row.attrs.reports.push({ title: p.file_title || null, url: p.report });
+  }
+  return [...by.values()];
+}
+
+// HUGEO text fields write a missing value as '<Null>'.
+const huText = (v) => (v == null || v === "<Null>" || String(v).trim() === "" ? null : v);
+
+/**
+ * One HUGEO thermal-well record with its position from the EOV attributes (the service
+ * withholds geometry). EOVX and EOVY are swapped on some rows; EOV eastings (> 380 km) and
+ * northings (< 380 km) never overlap, so the larger one is the easting.
+ */
+export function hugeoThermalRow(a) {
+  const e = Math.max(num(a.EOVX) ?? 0, num(a.EOVY) ?? 0);
+  const n = Math.min(num(a.EOVX) ?? 0, num(a.EOVY) ?? 0);
+  const p = eovToWgs84(e, n);
+  return { attrs: a, geometry: p.latitude == null ? null : { x: p.longitude, y: p.latitude } };
+}
+
+const HUGEO_THERMAL = "https://map.hugeo.hu/arcgis/rest/services/geoterm_en/MGT_well/MapServer";
+
+/** Every thermal well: layers 1-4 are active, inactive, liquidated and no-information wells. */
+async function loadHugeoThermal() {
+  const rows = [];
+  for (const layer of [1, 2, 3, 4]) {
+    for (let offset = 0; ; offset += 1000) {
+      const d = await fetchJson(`${HUGEO_THERMAL}/${layer}/query`, {
+        params: { where: "1=1", outFields: "*", returnGeometry: "false", orderByFields: "OBJECTID", resultOffset: offset, resultRecordCount: 1000, f: "json" },
+        timeoutMs: 60_000,
+      });
+      if (d.error) throw new Error(`ArcGIS error ${d.error.code}: ${d.error.message} (${HUGEO_THERMAL}/${layer})`);
+      for (const f of d.features ?? []) rows.push(hugeoThermalRow(f.attributes ?? {}));
+      if (!d.exceededTransferLimit) break;
+    }
+  }
+  return rows;
+}
 
 const ISLAND_BOXES = {
   metropole: [-5.3, 41.3, 9.7, 51.2],
@@ -82,8 +238,14 @@ export const EUROPE_SOURCES = [
     typeName: "ms:BSS_TOTAL_SANS_LABEL",
     geometryName: "msGeometry",
     pageMax: 1000,
+    // MapServer sends a digit-led equality literal to PostGIS unquoted (HTTP 403 for '15/9-19 A'
+    // or '1152ZZ0001/S'); a wildcard-free PropertyIsLike is the same exact match and works.
+    eqAsLike: true,
     idKind: "id",
-    idLabel: "BSS id (e.g. BSS002NLFW)",
+    idLabel: "BSS id (e.g. BSS002NLFW) or old BSS code (e.g. 1152ZZ0001/S)",
+    // The pre-2018 BSS code (sheet + 'X' + number / designation), still quoted in French reports.
+    idAlso: { field: "reference", test: /^\d{4,5}[A-Z]{1,2}\d{4}\/\S+$/i },
+    wellNameAlso: "reference", // a name search also finds the old BSS code ('1152ZZ0001/S')
     extent: Object.values(ISLAND_BOXES),
     caveat:
       "A registry of every borehole (geothermal, water, mining, geotechnical...), not only deep wells. well_type matches the declared purpose ('geothermie'); county matches the commune. No operator or status fields. Each record links its InfoTerre detail sheet.",
@@ -96,7 +258,8 @@ export const EUROPE_SOURCES = [
     normalize: (a, g) => ({
       api: a.bss_id,
       reference: a.reference,
-      wellName: a.nom_local || a.designation || a.indice,
+      // nom_local and designation are often a generic letter ('S', 'S1' = sondage); the old BSS code says more.
+      wellName: (a.nom_local && a.nom_local.length > 2 ? a.nom_local : null) || a.reference || a.designation || a.indice,
       operator: null,
       status: a.etat_ouvrage,
       wellType: a.recherche || a.utilisation || null,
@@ -126,7 +289,7 @@ export const EUROPE_SOURCES = [
     caveat: "Synced daily. Depths in metres. Coordinates come from the geometry (the wlbNsDecDeg/wlbEwDecDeg attributes are ED50).",
     searchFields: {
       api: "wlbWellboreName",
-      well_name: "wlbWell",
+      well_name: "wlbWellboreName", // contains-match: a well name ("30/6-C-7") finds all its wellbores
       operator: "wlbDrillingOperator",
       county: "wlbMainArea",
       field: "wlbField",
@@ -155,6 +318,15 @@ export const EUROPE_SOURCES = [
       waterDepth: nz(a.wlbWaterDepth),
       bottomHoleTempC: nz(a.wlbBottomHoleTemperature),
       formationAtTd: a.wlbFormationAtTd,
+      ageAtTd: a.wlbAgeAtTd || null,
+      // Entry and completion dates are stored at UTC midnight; the plugged dates at Oslo midnight (22:00/23:00 UTC).
+      pluggedDate: localMidnightToIso(a.wlbPluggedDate),
+      pluggedAbandonedDate: localMidnightToIso(a.wlbPluggedAbandonDate),
+      kbElevationM: nz(a.wlbKellyBushElevation),
+      drillingFacility: a.wlbDrillingFacility || null,
+      drillingFacilityType: a.wlbFacilityTypeDrilling || null,
+      drillPermit: a.wlbDrillPermit || null,
+      drillingDays: nz(a.wlbDrillingDays),
       factPageUrl: a.wlbFactPageUrl,
     }),
   },
@@ -189,7 +361,8 @@ export const EUROPE_SOURCES = [
     idLabel: "well registration number (e.g. '9/13a- 20B')",
     extent: v.extent,
     license: "NSTA Open User Licence",
-    caveat: "Depths in metres (TVDSS = true vertical depth sub-sea). Coordinates come from the geometry (TOPHOLEXDD/YDD are ED50 strings).",
+    caveat: "Depths in metres (TVDSS = true vertical depth sub-sea); datumElevationM is the log depth reference (datumType, usually the rotary table). Coordinates come from the geometry (TOPHOLEXDD/YDD are ED50 strings).",
+    wellNameAlso: "WELLREGNO", // NAME is empty on many rows; those display the registration number
     searchFields: {
       api: "WELLREGNO",
       well_name: "NAME",
@@ -202,17 +375,21 @@ export const EUROPE_SOURCES = [
     normalize: (a, g) => ({
       api: a.WELLREGNO,
       wellName: a.NAME || a.WELLREGNO,
-      operator: a[v.operatorField] || a.TDOPERATOR || null,
+      operator: nsta(a[v.operatorField]) || nsta(a.TDOPERATOR) || null,
       status: a.WELLOPSTAT,
       completionStatus: a.COMPLESTAT,
       wellType: a.ORIGINTENT,
       currentIntent: a.CURRWELLIN,
-      field: a.TARGETFLD,
-      licence: a.LICNO,
-      ...(v.onshore ? { county: a.ONS_COUNTY, unconventionalType: a.UNCWELTYP } : {}),
+      result: nsta(a.FLOWCLASS),
+      field: nsta(a.TARGETFLD),
+      licence: nsta(a.LICNO),
+      ...(v.onshore ? { county: a.ONS_COUNTY, unconventionalType: a.UNCWELTYP, groundElevationM: nz(a.GRNDELEV_M) } : {}),
       ...geomFirst(a, g),
       spudDate: msToIso(a.SPUDDATE),
+      tdReachedDate: msToIso(a.DATETDREAC),
       completionDate: msToIso(a.COMPLEDATE),
+      datumType: nsta(a.DATUMTYPE),
+      datumElevationM: nz(a.DATELEV_M),
       depthMD: nz(a.TDMDDEPM),
       depthTVDSS: nz(a.TDTVDSSM),
       waterDepth: nz(a.WATDEP_M),
@@ -267,8 +444,9 @@ export const EUROPE_SOURCES = [
     pageMax: 2000,
     idKind: "id",
     idLabel: "borehole code (e.g. 'NLW-GT-01')",
+    wellNameAlso: "BOREHOLE_CODE", // people type the code ('AWG-1') as often as the name ('Ameland Westgat-1')
     extent: [2.5, 50.7, 7.3, 55.9],
-    caveat: "Includes ~150 geothermal wells: well_type 'geothermic' (types 'Geothermic energy exploration' and 'Development geothermic energy production'). Depths in metres along hole (MD) and true vertical (TVD).",
+    caveat: "Includes ~150 geothermal wells: well_type 'geothermic' (types 'Geothermic energy exploration' and 'Development geothermic energy production'). well_name also searches the borehole code ('AWG-01'). Depths in metres along hole (MD) and true vertical (TVD) below the datum (datumType, datumElevationM above datumRelativeTo: NAP or MSL).",
     searchFields: {
       api: "BOREHOLE_CODE",
       well_name: "BOREHOLE_NAME",
@@ -296,6 +474,11 @@ export const EUROPE_SOURCES = [
       depthMD: nz(a.END_DEPTH_MAH),
       depthTVD: nz(a.END_DEPTH_MTVD),
       formationAtTd: a.LITHOSTRAT_CODE_AT_END_DEPTH,
+      datumType: a.REFERENCE_LEVEL ?? null,
+      datumElevationM: num(a.REFERENCE_LEVEL_HEIGHT),
+      datumRelativeTo: a.REFERENCE_LEVEL_RELATIVE_TO ?? null,
+      rig: a.DRILLING_RIG_OR_PLATFORM ?? null,
+      drillingContractor: a.DRILLING_COMPANY ?? null,
       detailUrl: a.URL,
     }),
   },
@@ -358,35 +541,42 @@ export const EUROPE_SOURCES = [
     geometryName: "SHAPE",
     outputFormat: "application/geo+json",
     noPaging: true, // the server ignores startIndex
+    fesNoEscape: true, // cardo.map: '!' escapes are taken literally and '(' is a parse error ('Bockstedt 42 (1.)')
+    alsoSearch: { operator: "OPERATOR_ORIG" }, // 'Wintershall' finds the wells it drilled that Harbour now operates
     pageMax: 2000,
     idKind: "id",
     idLabel: "LBEG well identifier",
     extent: [3.9, 47.5, 15.1, 55.9],
     caveat:
-      "Labels are German: status (L_STATUS) Verfüllt = plugged, Offen = open; well_type (B_ART) e.g. Erdölbohrung (oil), Gasbohrung (gas), Geothermikbohrung (geothermal); result e.g. Ölfündig (oil found), Nicht fündig (dry). Depths in metres. Bavaria is not covered.",
+      "Labels are German: status (L_STATUS) Verfüllt = plugged, Offen = open; well_type (B_ART) e.g. Erdölbohrung (oil), Gasbohrung (gas), Geothermikbohrung (geothermal); wellClass e.g. Produktionsbohrung, Aufschlussbohrung; result e.g. Ölfündig (oil found), Nicht fündig (dry). operator is today's operator (originalOperator drilled it); the operator filter matches either. Names carry the bore number ('Bockstedt 42 (1.)'). Depths in metres. Bavaria is not covered.",
     searchFields: {
       api: "IDENTIFIER",
       well_name: "LOCHNAME",
-      operator: "FIRMA",
+      operator: "OPERATOR_AKT",
       status: "L_STATUS",
       well_type: "B_ART",
     },
     normalize: (a, g) => ({
       api: a.IDENTIFIER,
       wellName: a.LOCHNAME,
-      operator: a.FIRMA,
-      originalOperator: a.OPERATOR,
+      operator: a.OPERATOR_AKT || a.OPERATOR_ORIG || null,
+      originalOperator: a.OPERATOR_ORIG || null,
       status: a.L_STATUS,
       wellType: a.B_ART,
-      wellClass: a.B_KLASSE2,
+      wellClass: a.B_KLASSE_L || null,
       result: a.G_ERGEBNIS || a.T_ERGEBNIS || null,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
       spudDate: dmyToIso(a.BOHRBEGINN),
       endDrillDate: dmyToIso(a.BOHRENDE),
       depthMD: nz(a.ENDTIEFE),
-      formationAtTd: a.E_HORIZO_L,
-      logs: a.LOGDATEN,
+      depthUnit: "m",
+      groundElevationM: a.A_HOEHE > -999 ? a.A_HOEHE : null, // -9999 = unknown
+      waterDepth: a.WASSERTIEFE > 0 ? a.WASSERTIEFE : null,
+      formationAtTd: a.ATS_E_HORI_L || a.E_HORIZONT_L || null,
+      logs: a.LOG_DIGITAL || null, // digital logs held: 'Ja' / 'Nein'
+      stateName: a.BUNDESLAND || null,
+      shortName: a.KURZNAME || null,
     }),
   },
   {
@@ -418,17 +608,20 @@ export const EUROPE_SOURCES = [
       county: a.WOJEWODZTWO,
       district: a.POWIAT,
       ...geomFirst(a, g),
-      year: a.ROK,
+      locality: a.MIEJSCOWOSC || null,
+      drillYear: a.ROK || null,
       depth: nz(a.GLEBOKOSC),
       depthUnit: "m",
+      elevationM: num(a.RZEDNA),
       formationAtTd: a.STRAT_EN,
     }),
   },
   ...[
-    // offshore spud dates are long-form ('Wednesday, April 25, 2001'); onshore are DD/MM/YYYY
-    ["IE-OFF", 1, "Ireland offshore petroleum wells", { operator: "Shell" }, [-18.0, 48.0, -5.0, 57.5], namedDateToIso],
-    ["IE-ON", 2, "Ireland onshore petroleum wells", { operator: "Aran" }, [-10.7, 51.3, -5.9, 55.5], dmyToIso],
-  ].map(([key, layer, label, probe, extent, spud]) => ({
+    // Dates are long-form ('Wednesday, April 25, 2001') or DD/MM/YYYY, on both layers (ieDate).
+    ["IE-OFF", 1, "Ireland offshore petroleum wells", { operator: "Shell" }, [-18.0, 48.0, -5.0, 57.5], "Depths in the unit given (depthUnit, usually ft); rigDatum is the rig floor height, apparently in the same unit."],
+    // The onshore layer has no UNIT field; its depths are feet (Doonbeg-1 10,715).
+    ["IE-ON", 2, "Ireland onshore petroleum wells", { operator: "Aran" }, [-10.7, 51.3, -5.9, 55.5], "Depths in feet."],
+  ].map(([key, layer, label, probe, extent, units]) => ({
     key,
     country: "IE",
     state: null,
@@ -440,7 +633,7 @@ export const EUROPE_SOURCES = [
     idKind: "id",
     idLabel: "well number (e.g. '48/25-4')",
     extent,
-    caveat: "Small dataset on a departmental ArcGIS Online account. Depths in the unit given (usually ft).",
+    caveat: `Small dataset on a departmental ArcGIS Online account. ${units} completionDate is the rig release date.`,
     searchFields: {
       api: "WELL_NUM",
       well_name: "WELL_NUM",
@@ -456,9 +649,12 @@ export const EUROPE_SOURCES = [
       result: a.RESULT,
       wellType: a.WELL_CLASS ?? null,
       ...geomFirst(a, g),
-      spudDate: spud(a.WELL_SPUD), // START_DATE is only the year's first day
+      spudDate: ieDate(a.WELL_SPUD), // START_DATE is only the year's first day
+      completionDate: ieDate(a.RIGRELEASE), // rig release
+      rig: a.RIG_NAME || null,
       depth: nz(a.WELL_DEPTH),
-      depthUnit: a.UNIT ?? null,
+      depthUnit: a.UNIT ? (/^f/i.test(a.UNIT) ? "ft" : a.UNIT) : layer === 2 ? "ft" : null,
+      rigDatum: nz(a.RIG_DATUM),
       waterDepth: nz(a.WATER_DEP),
     }),
   })),
@@ -497,6 +693,7 @@ export const EUROPE_SOURCES = [
       ...geomFirst(a, g, "n_degrees", "e_degrees"),
       spudDate: isoDate(a.spud_da),
       completionDate: isoDate(a.comp_da),
+      rig: a.rig || null,
       detailUrl: a.well_info,
     }),
   },
@@ -509,11 +706,13 @@ export const EUROPE_SOURCES = [
     agency: "BGR - Federal Institute for Geosciences and Natural Resources (German Borehole Locations, GBL)",
     url: "https://services.bgr.de/arcgis/rest/services/geologie/gbl/MapServer/4",
     pageMax: 2000,
+    // BoreholeML codelists v2.1 (schemas.bgr.de/boreholeml/codelists/v2/*.xml), English names.
+    codes: { status: BGR_STATUS, well_type: BGR_PURPOSE },
     idKind: "id",
     idLabel: "BoreholeML id (e.g. 'BIS-BY_6138BG015016')",
     extent: [5.8, 47.2, 15.1, 55.1],
     caveat:
-      "3.1 million boreholes, nearly all shallow: ~30,000 are deeper than 400 m (hydrocarbon, geothermal incl. the Munich-area Molasse wells, salt and storage). For deep wells add a depth filter with raw_query (totalLength > 1000). Hessen, Rhineland-Palatinate and Saarland are not included. Bavarian boreholes are named only by BIS-BY code, so search them by place (county = municipality). wellType and status are BoreholeML codes as published (GTH = geothermal, HY = hydrogeological...). No operator. DE-LBEG has richer records for Lower Saxony, the North Sea and the Upper Rhine.",
+      "3.1 million boreholes, nearly all shallow: ~30,000 are deeper than 400 m (hydrocarbon, geothermal incl. the Munich-area Molasse wells, salt and storage). For deep wells add a depth filter with raw_query (totalLength > 1000). Hessen, Rhineland-Palatinate and Saarland are not included. Bavarian boreholes are named only by BIS-BY code, so search them by place (county = municipality). wellType and status are decoded from the BoreholeML codelists (wellTypeCode / statusCode keep the code: GTH = geothermal, EE = energy resources, UG = underground storage; vf = backfilled); a filter takes the code or a word of its label ('geothermal', 'storage'). No operator. DE-LBEG has richer records for Lower Saxony, the North Sea and the Upper Rhine.",
     searchFields: { api: "gml_ID", well_name: "fullName", county: "locationName", status: "boreholeStatus", well_type: "drillingPurpose" },
     normalize: (a, g) => ({
       api: a.gml_ID,
@@ -528,6 +727,8 @@ export const EUROPE_SOURCES = [
       spudDate: msToIso(a.drillingDate),
       depthMD: nz(a.totalLength),
       depthUnit: "m",
+      elevationM: looseNum(a.surfaceLevel), // decimal comma: '598,99'
+      formationAtTd: a.lastHorizon || null, // the state survey's stratigraphic code
       project: a.project,
       detailUrl: a.boreholeWebLink,
       databaseSource: a.databaseSource,
@@ -744,7 +945,7 @@ export const EUROPE_SOURCES = [
     extent: [16.8, 47.7, 22.6, 49.7],
     license: "Free use with attribution: copyright ŠGÚDŠ",
     caveat:
-      "~310 geothermal wells: wellhead temperature (deg C), yield (l/s), thermal power (MWt), mineralisation (g/l), aquifer age and lithology. status says whether the well still exists, wellType how it is used. Year only. Depths in metres.",
+      "~310 geothermal wells: wellhead temperature (deg C), yield (l/s), thermal power (MWt), mineralisation (g/l), aquifer age and lithology. status says whether the well still exists, wellType how it is used; field is the geothermal structure. ~50 wells have no registration number ('bez RČ'): api is null, find them by name. Year only. Depths in metres.",
     searchFields: {
       api: "registracnecislo",
       well_name: "technickeoznaceniezdroja",
@@ -754,17 +955,20 @@ export const EUROPE_SOURCES = [
       well_type: "vyuzivanie",
     },
     normalize: (a, g) => ({
-      api: skText(a.registracnecislo),
+      api: skRegNo(a.registracnecislo),
       wellName: skText(a.technickeoznaceniezdroja) ?? skText(a.nazovzdroja),
       operator: skText(a.prevadzkovatel),
       owner: skText(a.vlastnik),
       status: skText(a.existenciavrtu),
       wellType: skText(a.vyuzivanie),
       county: a.lokalita,
+      field: skText(a.nazovutvaru), // the geothermal structure / groundwater body
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
       drillYear: a.rokrealizacie || null,
       depthMD: nz(a.hlbkavrtu),
+      elevationM: num(a.zteren),
+      openIntervalM: skText(a.otvorenyusekvrtu),
       depthUnit: "m",
       wellheadTempC: num(a.teplotanausti),
       yieldLps: num(a.vydatnost),
@@ -861,6 +1065,7 @@ export const EUROPE_SOURCES = [
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
       spudDate: ddmmyyyy(a.DDATE),
+      drillYear: gsniYear(a.DDATE), // also for the 'mmyyyy' and 'yyyy' dates
       depthMD: nz(a.TOTDEPTH),
       depthUnit: "m",
       elevationM: num(a.ODLEV),
@@ -875,11 +1080,12 @@ export const EUROPE_SOURCES = [
     agency: "British Geological Survey - onshore hydrocarbon well data index",
     url: "https://map.bgs.ac.uk/arcgis/rest/services/GeoIndex_Onshore/hydrocarbon_well_data/MapServer/0",
     pageMax: 2000,
+    dedupeBy: "WELL_ID", // one row per archived data item: ~4,000 rows for ~2,300 wells
     idKind: "id",
     idLabel: "well id (e.g. 'L51/26- 1')",
     extent: [-8.7, 49.8, 1.9, 60.9],
     caveat:
-      "~4,000 onshore hydrocarbon wells incl. ~240 in Scotland, which GB-NSTA-ON (England only) lacks. Index only: well id, name and original operator.",
+      "~2,300 onshore hydrocarbon wells (one row per archived data item, merged by well id) incl. ~240 in Scotland, which GB-NSTA-ON (England only) lacks. Index only: well id, name, original operator and a link to one archived data item (dataItemUrl).",
     searchFields: { api: "WELL_ID", well_name: "WELL_NAME", operator: "ORIGINAL_OPERATOR" },
     normalize: (a, g) => ({
       api: a.WELL_ID,
@@ -888,6 +1094,7 @@ export const EUROPE_SOURCES = [
       status: null,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
+      dataItemUrl: a.DETAIL_URL || null,
     }),
   },
   {
@@ -912,8 +1119,8 @@ export const EUROPE_SOURCES = [
     normalize: (a, g) => ({
       api: a.boornummer,
       wellName: a.namen,
-      operator: a.opdrachtgever,
-      driller: a.uitvoerder,
+      operator: /^onbekend$/i.test(String(a.opdrachtgever ?? "").trim()) ? null : a.opdrachtgever, // 'onbekend' = unknown
+      driller: /^onbekend$/i.test(String(a.uitvoerder ?? "").trim()) ? null : a.uitvoerder,
       status: null,
       wellType: a.doel,
       method: a.methode,
@@ -945,7 +1152,7 @@ export const EUROPE_SOURCES = [
     idLabel: "DGU number (e.g. '9.317')",
     extent: [8.0, 54.5, 15.3, 57.8],
     caveat:
-      "~170 deep onshore wells (exploration, geothermal - Thisted, Sønderborg, Margretheholm - and storage). wellName is the location description. Year only. Depths in metres. detailUrl opens the Jupiter borehole report.",
+      "~174 deep onshore wells drilled up to 2001 (exploration, storage, research; Thisted-2). Newer geothermal wells (Margretheholm, Sønderborg) are in DK-GEUS and DK-GEO. wellName is the location description. Year only. Depths in metres. detailUrl opens the Jupiter borehole report.",
     searchFields: { api: "dgunr", well_name: "sted", well_type: "formaal_tekst" },
     normalize: (a, g) => ({
       api: a.dgunr,
@@ -962,32 +1169,84 @@ export const EUROPE_SOURCES = [
     }),
   },
   {
+    key: "DK-GEO",
+    country: "DK",
+    state: null,
+    kind: "snapshot",
+    via: "GEUS WFS, fetched whole",
+    label: "Denmark geothermal wells and geothermal evaluations of deep wells (GEUS Samba), with their reports",
+    probe: { well_name: "Thisted" },
+    agency: "GEUS - Geological Survey of Denmark and Greenland (Samba)",
+    url: "https://data.geus.dk/geusmap/ows/4326.jsp",
+    load: async () => {
+      const d = await fetchJson("https://data.geus.dk/geusmap/ows/4326.jsp", {
+        params: { service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: "ms:samba_wells_geotermi", outputFormat: "geojson", srsName: "urn:ogc:def:crs:EPSG::4326", count: "2000" },
+        timeoutMs: 60_000,
+      });
+      return geusGeothermalWells(d.features);
+    },
+    pageMax: 500,
+    idKind: "id",
+    idLabel: "well name (e.g. 'THISTED-3')",
+    extent: [8.0, 54.5, 15.3, 57.8],
+    caveat:
+      "~66 wells drilled or evaluated for geothermal energy (Sønderborg-1/2, Margretheholm-1, Thisted-1 to -4, Tønder, Aars, Frederikshavn...), each with its GEUS reports (reports: title and link) and summary sheet. Name and location only. Search matches 'a' for 'å' but not 'o' for 'ø' or 'ae' for 'æ': type 'SØNDERBORG'.",
+    searchFields: { api: "name", well_name: "name" },
+    normalize: (a, g) => ({
+      api: a.name,
+      wellName: a.name,
+      operator: null,
+      status: null,
+      wellType: "Geothermal",
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      summarySheetUrl: a.summary_sheet || null,
+      reports: a.reports ?? [],
+    }),
+  },
+  {
     key: "GL-GEUS",
     country: "GL",
     state: null,
-    kind: "wfs",
-    dialect: "fes",
-    label: "Greenland petroleum wells (onshore Nuussuaq and offshore West Greenland)",
+    kind: "snapshot",
+    via: "GEUS WFS (whole layer)",
+    label: "Greenland petroleum wells and cores (onshore Nuussuaq, offshore West and North-East Greenland)",
     probe: { well_name: "Hellefisk" },
-    agency: "GEUS - Geological Survey of Denmark and Greenland (Samba)",
-    url: "https://data.geus.dk/geusmap/ows/4326.jsp",
-    typeName: "ms:samba_wells_grl",
-    geometryName: "msGeometry",
+    agency: "GEUS - Geological Survey of Denmark and Greenland (Greenland drillhole localities)",
+    url: GEUS_OWS,
+    load: loadGreenlandWells,
     pageMax: 1000,
     idKind: "id",
     idLabel: "well name (e.g. 'Qulleq-1')",
     extent: [-74.0, 59.0, -10.0, 84.0],
-    caveat: "~100 wells, incl. the offshore Hellefisk-1, Ikermiut-1, Kangâmiut-1, Nukik-1/2 and Qulleq-1. Name and location only; summarySheetUrl opens GEUS's well data summary.",
-    searchFields: { api: "well_name", well_name: "well_name" },
-    normalize: (a, g) => ({
-      api: a.well_name,
-      wellName: a.well_name,
-      operator: null,
-      status: null,
-      latitude: g?.y ?? null,
-      longitude: g?.x ?? null,
-      summarySheetUrl: a.well_data_summary_sheet,
-    }),
+    caveat:
+      "The ~150 drillholes GEUS classes as oil and gas exploration: about 20 deep wells (Hellefisk-1, Ikermiut-1, Kangâmiut-1, Nukik-1/2, Qulleq-1, the 2010-11 Capricorn (Cairn) wells Alpha-1, AT2-1, LF7-1, T8-1..., and onshore GANE/GANK/GANT/GANW#1 and GRO 3), the rest shallow cores and seabed samples (Fylla GC98, Block 9, North-East Greenland 'SC' cores). operator is the company that drilled it. depthMD (m) is the drilled TD for wells but the core base below sea level for the shallow cores. waterDepth (m) only where GEUS records the seabed. detailUrl opens GEUS's well data summary sheet (nearly empty for the cores).",
+    searchFields: { api: "drillhole_identifer", well_name: "drillhole_identifer", operator: "company_name", county: "locality" },
+    normalize: (a, g) => {
+      const bottom = num(a.depth_to);
+      const collar = num(a.collar_altitude);
+      return {
+        api: a.drillhole_identifer,
+        wellName: a.drillhole_identifer,
+        alias: a.historic_identifier && a.historic_identifier !== a.drillhole_identifer ? a.historic_identifier : null,
+        operator: a.company_name || null,
+        status: null,
+        wellType: a.purpose_hidden,
+        county: a.locality,
+        licence: a.licence_number && !/^(n\/a|unknown)$/i.test(a.licence_number) ? a.licence_number : null,
+        latitude: g?.y ?? num(a.latitude),
+        longitude: g?.x ?? num(a.longitude),
+        spudDate: isoDate(a.start_date),
+        endDrillDate: isoDate(a.end_date),
+        // Wells: TD drilled below the reference point (the summary sheet's 'TD drill'); cores: core base below sea level.
+        depthMD: bottom == null ? null : Math.abs(bottom),
+        depthUnit: "m",
+        // collar_altitude is the seabed (negative) offshore, the ground onshore; 0 means not recorded.
+        waterDepth: collar < 0 ? -collar : null,
+        groundElevationM: collar > 0 ? collar : null,
+        detailUrl: geusSheetUrl(a.report),
+      };
+    },
   },
   {
     key: "EU-DARLINGE",
@@ -1000,9 +1259,10 @@ export const EUROPE_SOURCES = [
     pageMax: 2000,
     idKind: "id",
     idLabel: "DARLINGe object id (e.g. '386_1_O')",
+    wellNameAlso: "NAME_LOCAL_OBJ", // Hungarian NAME_OBJ is a registry number; the local name ('3-102') is here
     extent: [13.3, 42.5, 29.8, 48.6],
     caveat:
-      "A 2017-19 snapshot of ~760 thermal-water wells and springs in the southern Pannonian basin: ~590 in Hungary, the rest in Romania, Slovenia, Croatia, Serbia and Bosnia. county filters by locality; the country is in countryName. Hungarian names are registry numbers. Depths in metres (operationalDepthM is the screened depth).",
+      "A 2017-19 snapshot of ~760 thermal-water wells and springs in the southern Pannonian basin: ~590 in Hungary, the rest in Romania, Slovenia, Croatia, Serbia and Bosnia. county filters by locality; the country is in countryName. Hungarian names are registry numbers; localName (also searched by well_name) is the local well name. Depths in metres (operationalDepthM is the screened depth).",
     searchFields: { api: "OBJ_ID", well_name: "NAME_OBJ", county: "LOCALITY_OBJ", status: "ACTIVITY_ID", well_type: "PURPOSE_ID" },
     normalize: (a, g) => ({
       api: a.OBJ_ID,
@@ -1013,12 +1273,107 @@ export const EUROPE_SOURCES = [
       wellType: a.PURPOSE_ID,
       county: a.LOCALITY_OBJ,
       countryName: a.CNT_NAME,
+      localName: a.NAME_LOCAL_OBJ || null,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
+      elevationM: num(a.Z_OBJ_local),
       drillYear: a.YEAR_DRILL || null,
       depthMD: nz(a.DEPTH_WELL_m),
       operationalDepthM: nz(a.DEPTH_OPERATIONAL_m),
       depthUnit: "m",
+    }),
+  },
+  {
+    key: "HU-HUGEO",
+    country: "HU",
+    state: null,
+    label: "Hungary borehole archive (all purposes, incl. ~8,400 hydrocarbon wells and thermal-water wells)",
+    probe: { well_type: "szénhidrogén" },
+    agency: "Hungarian Geological Survey (HUGEO, formerly MBFSZ) - borehole archive (Adattári fúrások)",
+    url: "https://map.hugeo.hu/arcgis/rest/services/furas/map_frs_adt_web_mercator/MapServer/0",
+    pageMax: 1000,
+    idKind: "id",
+    idLabel: "HUGEO borehole id (FRS_ID, a number)",
+    apiNumeric: true,
+    extent: [16.1, 45.7, 22.9, 48.6],
+    license: "No licence stated on the service (HUGEO public map service)",
+    caveat:
+      "~178,000 archived boreholes. well_type is the Hungarian purpose: 'szénhidrogén' = hydrocarbon (~8,400), 'hévíz' = thermal water, 'vízkutató' = water exploration, 'szénkutató' = coal, 'bauxit'... Names use the Hungarian well codes ('Baján-1', 'B-10'); county is the megye. The server matches accents exactly: type 'Algyő', not 'Algyo'. Year only, no operator or status. depthMD is in metres.",
+    searchFields: {
+      api: "FRS_ID",
+      well_name: "JELSZAM",
+      county: "MEGYE",
+      well_type: "jelleg",
+    },
+    normalize: (a, g) => ({
+      api: a.FRS_ID != null ? String(a.FRS_ID) : null,
+      wellName: a.JELSZAM,
+      operator: null,
+      status: null,
+      wellType: a.jelleg,
+      county: a.MEGYE,
+      settlement: a.KZG_TLP ?? a.TLP,
+      settlementWhenDrilled: a.TLP,
+      ...geomFirst(a, g),
+      drillYear: nz(a.DATUM),
+      depthMD: nz(a.MELYSEG),
+      depthUnit: "m",
+      elevationM: nz(a.EOV_Z),
+      archiveNumber: a.dok_mafi,
+      archiveRef: a.dok_egyeb,
+      documentsInArchive: a.isAdattar,
+      remark: a.megj_MBFH,
+    }),
+  },
+  {
+    key: "HU-HUGEO-GEO",
+    country: "HU",
+    state: null,
+    kind: "snapshot",
+    via: "ArcGIS map service, fetched whole",
+    label: "Hungary thermal-water well cadastre (outflow and bottom-hole temperatures, yield, aquifer)",
+    probe: { well_name: "Harkány" },
+    agency: "Hungarian Geological Survey (HUGEO) - National Geothermal System (OGRe) thermal well cadastre",
+    url: `${HUGEO_THERMAL}/1`,
+    load: loadHugeoThermal,
+    pageMax: 500,
+    idKind: "id",
+    idLabel: "thermal well cadastral number (e.g. '1-3') or well name",
+    idAlso: { field: "MBFH" }, // the well name
+    extent: [16.1, 45.7, 22.9, 48.6],
+    license: "No licence stated on the service (HUGEO public map service)",
+    caveat:
+      "~1,800 thermal-water wells (active, inactive, liquidated) with outflow temperature, bottom-hole temperature and its depth, yield, screened interval, aquifer age and water type. Year of drilling only. Positions are converted from the EOV grid (EPSG:23700) because the service withholds geometry. Names are Hungarian ('Algyő'); this copy also matches them typed without accents.",
+    searchFields: {
+      api: "Heviz_kat",
+      well_name: "MBFH",
+      status: "statusz",
+      well_type: "hasznositas_modja",
+    },
+    wellNameAlso: "helyi_nev",
+    normalize: (a, g) => ({
+      api: a.Heviz_kat,
+      wellName: a.MBFH,
+      localName: huText(a.helyi_nev),
+      operator: null,
+      status: huText(a.statusz),
+      wellType: huText(a.hasznositas_modja),
+      latitude: g?.y ?? null,
+      longitude: g?.x ?? null,
+      drillYear: nz(a.furas_befej_eve),
+      depthMD: nz(a.talpmely),
+      depthUnit: "m",
+      outflowTempC: num(a.kifolyo_hom_),
+      bottomHoleTempC: num(a.talpho),
+      bottomHoleTempDepthM: nz(a.talpho_melyseg),
+      maxYieldLpm: num(a.Q_max),
+      screenTopM: num(a.szuro_teteje),
+      screenBottomM: num(a.szuro_alja),
+      aquiferAge: huText(a.kor_teljes),
+      aquiferLithology: huText(a.szurozott_szakasz_litologia),
+      waterType: huText(a.viztipus),
+      tdsGpl: huText(a.tds),
+      groundwaterBody: huText(a.viztest),
     }),
   },
   {
@@ -1038,7 +1393,7 @@ export const EUROPE_SOURCES = [
     extent: [5.9, 45.8, 10.5, 47.9],
     license: "Swiss open government data: free use, source must be cited (swisstopo)",
     caveat:
-      "All ~160 Swiss wells deeper than 500 m, incl. geothermal Basel-1, St-Gallen GT-1 and Nagra research holes. operator is the client who commissioned the well (owner is the rights holder); county is the canton code (BE, VD...). Many drilling dates are given only to the month or year ('xx.05.2006') - drillYear has the year. temperature is swisstopo's text, e.g. '173.7°C @ 4600m MD'. Each record links its swissgeol.ch borehole page.",
+      "All ~160 Swiss wells deeper than 500 m, incl. geothermal Basel-1, St-Gallen GT-1 and Nagra research holes. operator is the client who commissioned the well (owner is the rights holder); county is the canton code (BE, VD...). Many drilling dates are given only to the month or year ('xx.05.2006') - drillYear has the year. temperature is swisstopo's text, e.g. '173.7°C @ 4600m MD'. datumElevationM is the depth reference (datumType, e.g. rotary table) in metres above sea level. About a third of the records link a swissgeol.ch borehole page (detailUrl) or reports (documentationUrl).",
     searchFields: {
       api: "name",
       well_name: "name",
@@ -1063,7 +1418,9 @@ export const EUROPE_SOURCES = [
       depthMD: looseNum(a.td_m_md),
       depthTVD: looseNum(a.td_m_tvd),
       depthUnit: "m",
-      groundElevationM: looseNum(a.zgl),
+      groundElevationM: looseNum(swissText(a.zgl)),
+      datumElevationM: looseNum(swissText(a.zref)),
+      datumType: swissText(a.ref_type_en),
       formationAtTD: swissText(a.fm_at_td),
       shows: swissText(a.discover_en),
       temperature: swissText(a.temp),
@@ -1089,7 +1446,7 @@ export const EUROPE_SOURCES = [
     idLabel: "GSEU borehole id (e.g. 'IS_well_026')",
     extent: [-32.0, 34.0, 45.0, 72.0],
     caveat:
-      "Harmonised compilation (~42k boreholes) from 25 surveys - the only keyless source found for Hungary, Austria, Croatia, Romania, Greece, Spain and Portugal incl. the Azores. county filters by country name. Labels are inconsistent across countries (and some characters are mangled); drill year only. bhtC = bottom-hole temperature.",
+      "Harmonised compilation (~42k boreholes) from 25 surveys - the only keyless deep-borehole source found for Austria, Romania, Greece and Spain, and the bottom-hole temperatures for Hungary, Croatia and Portugal incl. the Azores (whose registries are HU-HUGEO, HR-AZU-* and PT-LNEG). county filters by country name. Labels are inconsistent across countries (and some characters are mangled); drill year only. bhtC = bottom-hole temperature.",
     searchFields: {
       api: "id",
       well_name: "well_name",

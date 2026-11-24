@@ -24,6 +24,7 @@ export const FEDERAL_SOURCES = [
     extent: LOWER_48_AND_AK,
     caveat:
       "~130,000 wells that state regulators list as orphaned and unplugged (2026 release), across ~27 states. api is the 14-digit API number where the state gives one; other identifier types (IGSID, ILRefNo, KYPermit) are in identifierType. status and type are each state's own terms. county filters by county name; the state is in stateName. Includes federal surface and mineral ownership.",
+    wellNumberField: "well_number",
     searchFields: {
       api: "primary_identifier",
       well_name: "well_name",
@@ -67,9 +68,15 @@ export const FEDERAL_SOURCES = [
     idKind: "id",
     idLabel: "APD tracking number",
     dedupeBy: "APD_TRACK_NUM", // the layer also maps each APD's bottom-hole and entry points
+    // ...so sort the row to keep first: 'Surface Location' / 'SURFACE HOLE' before 'Entry
+    // Point', 'Center of Pit' and the bottom hole (descending), then by LOC_STATUS (CURRENT
+    // before HISTORIC; a blank status, on ~160 rows, sorts first, mostly on surface rows).
+    // The tracking number descending puts the ~325 rows without one last instead of first.
+    orderBy: "APD_TRACK_NUM DESC, LOCATION DESC, LOC_STATUS",
     extent: [-109.1, 25.8, -93.4, 40.1],
     caveat:
-      "Drilling permit applications on federal minerals administered by BLM's New Mexico State Office (NM, OK, KS, TX), fiscal years 2008 on, incl. pending and withdrawn ones - permits, not drilled wells, with no API number or depth. One record per APD; locationType says whether the point shown is the surface, bottom-hole or entry point.",
+      "Drilling permit applications on federal minerals administered by BLM's New Mexico State Office (NM, OK, KS, TX), fiscal years 2008 on, incl. pending and withdrawn ones - permits, not drilled wells, with no API number or depth. One record per APD; the point shown is the APD's surface location where it has one (the current one first), and locationType says which point it is (surface, entry point or bottom hole). BLM leaves the operator blank on some surface rows, so an operator search can show such an APD at its bottom hole.",
+    wellNumberField: "WELL_NUM",
     searchFields: {
       api: "APD_TRACK_NUM",
       well_name: "WELL_NAME",

@@ -11,6 +11,7 @@ import { parseCsv, csvObjects } from "../csv.js";
 import { queryLayer, sqlQuote } from "./arcgis.js";
 import { TX_COUNTY_CODES, TX_WELL_TYPE_CODES } from "../sources/tx-rrc-codes.js";
 import { apiCountySequence } from "../api-number.js";
+import { detached, callSignal } from "../call-context.js";
 
 const EWA = "https://webapps2.rrc.texas.gov/EWA";
 const TX_GIS_WELLS = "https://gis.rrc.texas.gov/server/rest/services/rrc_public/RRC_Public_Viewer_Srvs/MapServer/1";
@@ -51,7 +52,37 @@ function apiParts(api) {
   return cs?.county.length === 3 ? { prefix: cs.county, suffix: cs.sequence } : null;
 }
 
-async function wellboreQuery(args) {
+// A county's wellbore CSV takes 20-25 s; paging, counting and match_well repeat the same
+// query, so answers are kept for half an hour (the eight most recent). The download is
+// shared by every call that asks while it runs, so it runs detached: a call that is
+// abandoned stops waiting for it, and the others still get the answer.
+const QUERY_TTL_MS = 30 * 60_000;
+const recent = new Map(); // JSON(args) -> { at, rows: Promise<rows> }
+
+/** The shared promise, or an "Abandoned" rejection as soon as this call's own signal fires. */
+function untilAbandoned(promise, signal) {
+  if (!signal) return promise;
+  const abandoned = () => Object.assign(new Error(`Abandoned: ${signal.reason?.message ?? "the call no longer needs this answer"}`), { abandoned: true });
+  if (signal.aborted) return Promise.reject(abandoned());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abandoned());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function wellboreQuery(args) {
+  const key = JSON.stringify(args);
+  const hit = recent.get(key);
+  if (hit && Date.now() - hit.at < QUERY_TTL_MS) return untilAbandoned(hit.rows, callSignal());
+  const rows = detached(() => fetchWellbores(args));
+  recent.set(key, { at: Date.now(), rows });
+  rows.catch(() => recent.delete(key));
+  while (recent.size > 8) recent.delete(recent.keys().next().value);
+  return untilAbandoned(rows, callSignal());
+}
+
+async function fetchWellbores(args) {
   const params = {
     methodToCall: "generateWellboreCriteriaReportCsv",
     "searchArgs.scheduleTypeArgHndlr.inputValue": "Both",

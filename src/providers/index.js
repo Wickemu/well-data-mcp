@@ -15,7 +15,8 @@ import { rrcEwaProvider } from "./rrc-ewa.js";
 import { snapshotProvider } from "./snapshot.js";
 import { fracFocusProvider } from "./fracfocus.js";
 
-const PROVIDERS = {
+/** kind -> provider. Exported so tests can plug in a stand-in. */
+export const PROVIDERS = {
   arcgis: arcgisProvider,
   wfs: wfsProvider,
   "rrc-ewa": rrcEwaProvider,

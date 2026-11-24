@@ -1,24 +1,24 @@
 // DOE Geothermal Data Repository catalog (gdr.openei.org/data.json, DCAT-US, ~6 MB,
 // CC BY 4.0 datasets). Unlike the OSTI index it carries each dataset's map footprint
 // and direct file links, so it answers "what geothermal data exists near this point".
-// Fetched once and kept in memory for a day.
+// Kept for a day in memory and on disk (src/disk-cache.js), so a new process does not
+// download it again.
 
 import { fetchJson } from "./http.js";
 import { radiusToBbox, haversineKm } from "./geo.js";
+import { cachedValue } from "./disk-cache.js";
 
 const CATALOG = "https://gdr.openei.org/data.json";
 const TTL_MS = 24 * 3600 * 1000;
 const MAX_SPAN_DEG = 30; // larger footprints are placeholders (some datasets list the whole globe)
 
-let cache = null; // { at, datasets }
+const datasets = cachedValue(
+  "gdr-catalog",
+  async () => ((await fetchJson(CATALOG, { timeoutMs: 90_000 })).dataset ?? []).map((d) => ({ ...d, _bbox: footprint(d.spatial) })),
+  { ttlMs: TTL_MS }
+);
 
-async function catalog() {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.datasets;
-  const data = await fetchJson(CATALOG, { timeoutMs: 90_000 });
-  const datasets = (data.dataset ?? []).map((d) => ({ ...d, _bbox: footprint(d.spatial) }));
-  cache = { at: Date.now(), datasets };
-  return datasets;
-}
+const catalog = () => datasets.get();
 
 /** [minLon, minLat, maxLon, maxLat] of a GeoJSON footprint string, or null. */
 function footprint(spatial) {
@@ -37,6 +37,9 @@ function footprint(spatial) {
 
 const intersects = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
 const area = (b) => (b[2] - b[0]) * (b[3] - b[1]);
+
+/** Fetch the catalog now if the copy at hand has expired (a long-running server calls this). */
+export const warmGdr = () => catalog();
 
 export async function searchGdr({ query, latitude, longitude, radiusKm = 25, rows = 15 }) {
   const terms = (query ?? "").toLowerCase().split(/\s+/).filter(Boolean);

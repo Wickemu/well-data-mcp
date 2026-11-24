@@ -1,4 +1,12 @@
 {
-  "kind": "none",
-  "label": "MCP server over stdio (npm start serves no site); launched by an MCP client"
+  "kind": "server",
+  "label": "well-data-mcp (MCP over Streamable HTTP at /mcp; MCP clients can also launch it over stdio)",
+  "command": [
+    "node",
+    "src/index.js",
+    "--http",
+    "{port}"
+  ],
+  "port": 8110,
+  "url": "http://127.0.0.1:{port}/healthz"
 }

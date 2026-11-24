@@ -8,8 +8,9 @@ ArcGIS, WFS and query endpoints the agencies' own map viewers use.
 It answers questions like "which wells does Fervo have at Cape Station", "every well
 within 2 km of this pad", "look up API 30-025-36283", "what was pumped into this well's
 frac job", "bottom-hole temperatures in Weld County", "orphaned wells in this county",
-"Equinor's wellbores on the Norwegian shelf" or "geothermal wells near Larderello" -
-and says plainly when a country publishes nothing machine-readable.
+"Equinor's wellbores on the Norwegian shelf", "geothermal wells near Larderello" or
+"which registered well is the one a mud log calls 'Canyon JV 12H-30'" - and says
+plainly when a country publishes nothing machine-readable.
 
 ![World map: countries with live well registries, countries covered through the pan-European GSEU compilation, and countries checked and found to have no public registry](docs/coverage-map.svg)
 
@@ -56,7 +57,8 @@ and says plainly when a country publishes nothing machine-readable.
 | `MS` | Mississippi oil & gas wells | Mississippi State Oil & Gas Board | WFS |
 | `AL` | Alabama oil, gas & coalbed-methane wells | State Oil and Gas Board of Alabama (via Geological Survey of Alabama) | ArcGIS |
 | `FL` | Florida oil & gas wells | Florida Department of Environmental Protection, Oil and Gas Program | ArcGIS |
-| `PA` | Pennsylvania oil & gas wells | Pennsylvania DEP Office of Oil and Gas Management | ArcGIS |
+| `PA` | Pennsylvania oil & gas wells - conventional | Pennsylvania DEP Office of Oil and Gas Management | ArcGIS |
+| `PA-UNC` | Pennsylvania oil & gas wells - unconventional (Marcellus, Utica...) | Pennsylvania DEP Office of Oil and Gas Management | ArcGIS |
 | `OH` | Ohio oil & gas wells | Ohio DNR Division of Oil & Gas Resources | ArcGIS |
 | `WV` | West Virginia oil & gas wells | West Virginia DEP Office of Oil and Gas | ArcGIS |
 | `KY` | Kentucky oil & gas wells | Kentucky Geological Survey | ArcGIS |
@@ -66,6 +68,8 @@ and says plainly when a country publishes nothing machine-readable.
 | `NY` | New York oil, gas & solution-mining wells | New York DEC Division of Mineral Resources | ArcGIS |
 | `TN` | Tennessee oil & gas wells | Tennessee Department of Environment and Conservation (TDEC) | ArcGIS |
 | `VA` | Virginia gas & oil wells (active) | Virginia Energy, Division of Gas and Oil | ArcGIS |
+| `VA-PLUGGED` | Virginia gas & oil wells - plugged and released | Virginia Energy, Division of Gas and Oil | ArcGIS |
+| `VA-UNDRILLED` | Virginia gas & oil wells - permitted, not drilled | Virginia Energy, Division of Gas and Oil | ArcGIS |
 | `VA-HIST` | Virginia oil & gas wells - historic, incl. plugged and abandoned | Virginia Energy, Division of Geology and Mineral Resources (compiled for the National Geothermal Data System) | ArcGIS |
 | `CO-BHT` | Colorado borehole temperatures (bottom-hole and log temperatures by well) | Colorado state geological survey data in the National Geothermal Data System (AASG), served by the Nevada Bureau of Mines and Geology | ArcGIS |
 | `ID-BHT` | Idaho borehole temperatures (bottom-hole and log temperatures by well) | Idaho state geological survey data in the National Geothermal Data System (AASG), served by the Nevada Bureau of Mines and Geology | ArcGIS |
@@ -85,6 +89,8 @@ and says plainly when a country publishes nothing machine-readable.
 | `VT-BHT` | Vermont borehole temperatures (bottom-hole and log temperatures by well) | Vermont state geological survey data in the National Geothermal Data System (AASG), served by the Illinois State Geological Survey | ArcGIS |
 | `WV-BHT` | West Virginia borehole temperatures (bottom-hole and log temperatures by well) | West Virginia state geological survey data in the National Geothermal Data System (AASG), served by the West Virginia Geological and Economic Survey | ArcGIS |
 | `IA` | Iowa wells (Iowa Geological Survey GeoSam: water, exploration, gas-storage and oil tests) | Iowa Geological Survey (GeoSam) data in the National Geothermal Data System, served by the Illinois State Geological Survey | ArcGIS |
+| `OR-OG` | Oregon oil & gas well permits (Mist gas field and storage, exploration statewide) | Oregon DOGAMI, Mineral Land Regulation and Reclamation program (permit list) | Spreadsheet download |
+| `OR-GEO-PERMITS` | Oregon geothermal well and prospect-well permits, 1979 to date (Newberry, Neal Hot Springs, Glass Buttes...) | Oregon DOGAMI, Mineral Land Regulation and Reclamation program (permit list) | Spreadsheet download |
 | `US-ORPHAN` | US documented unplugged orphaned oil & gas wells (USGS national dataset, from state regulators) | U.S. Geological Survey - Documented Unplugged Orphaned Oil and Gas Well dataset (DOI 10.5066/P13FHBYG) | ArcGIS |
 | `US-BLM-NM` | BLM applications for permit to drill (APDs) on federal minerals - New Mexico, Oklahoma, Kansas, Texas | Bureau of Land Management, New Mexico State Office | ArcGIS |
 | `US-FRACFOCUS` | US hydraulic-fracturing disclosures (one record per frac job, with the chemical list) | FracFocus (Ground Water Protection Council / Interstate Oil & Gas Compact Commission) | FracFocus API |
@@ -102,9 +108,10 @@ and says plainly when a country publishes nothing machine-readable.
 
 | Key | Coverage | Agency | Via |
 |---|---|---|---|
-| `SK` | Saskatchewan oil & gas wells (vertical) | Saskatchewan Ministry of Energy and Resources | ArcGIS |
-| `SK-HZ` | Saskatchewan oil & gas wells (horizontal / directional) | Saskatchewan Ministry of Energy and Resources | ArcGIS |
-| `BC` | British Columbia oil & gas wells | BC Energy Regulator (BCER) | ArcGIS |
+| `SK` | Saskatchewan oil & gas wellbores with a point location (mostly vertical) | Saskatchewan Ministry of Energy and Resources | ArcGIS |
+| `SK-HZ` | Saskatchewan oil & gas wellbores with a drilled path (mostly horizontal / directional) | Saskatchewan Ministry of Energy and Resources | ArcGIS |
+| `BC` | British Columbia oil & gas wells - bottom holes (one record per drilled leg) | BC Energy Regulator (BCER) | ArcGIS |
+| `BC-SURFACE` | British Columbia oil & gas wells - surface holes (incl. authorized, not yet drilled) | BC Energy Regulator (BCER) | ArcGIS |
 | `ON` | Ontario oil, gas, salt & storage wells (incl. Lake Erie) | Ontario Ministry of Natural Resources (Land Information Ontario) | ArcGIS |
 | `NL-OFF` | Newfoundland & Labrador offshore wells | Newfoundland and Labrador Department of Industry, Energy and Technology | ArcGIS |
 | `NS-OFF` | Nova Scotia offshore wells | Canada-Nova Scotia Offshore Energy Board directory (via NRCan) | ArcGIS |
@@ -115,6 +122,8 @@ and says plainly when a country publishes nothing machine-readable.
 | `AB-GEO-SWANHILLS` | Alberta wells reaching the Swan Hills / Slave Point formations - formation depth and temperature (geothermal resource assessment) | Alberta Geological Survey / Alberta Energy Regulator | ArcGIS |
 | `AB-GEO-GRANITEWASH` | Alberta wells reaching the Granite Wash - formation depth and temperature (geothermal resource assessment) | Alberta Geological Survey / Alberta Energy Regulator | ArcGIS |
 | `AB-GEO-LEDUC` | Alberta wells reaching the Leduc Formation - formation depth and temperature (geothermal resource assessment) | Alberta Geological Survey / Alberta Energy Regulator | ArcGIS |
+| `AB-AER-ABANDONED` | Alberta abandoned wells with licence number and licensee (AER Abandoned Well Map) | Alberta Energy Regulator (AER) - Abandoned Well Map | ArcGIS |
+| `AB-NAMES-2016` | Alberta wells with names and licence numbers (AER well list as of December 2016, NETL copy) | AER well licence list (Dec 2016) as compiled in the US DOE NETL Global Oil & Gas Infrastructure (GOGI) database | ArcGIS |
 | `MB` | Manitoba oil & gas wells | Manitoba Petroleum Branch (Economic Development, Investment, Trade and Natural Resources) | Shapefile download |
 | `QC` | Quebec oil & gas wells and stratigraphic holes | Québec Ministère des Ressources naturelles et des Forêts (hydrocarbon wells) | ArcGIS |
 | `NS-ON` | Nova Scotia onshore petroleum wells | Nova Scotia Department of Natural Resources (onshore petroleum wells) | ArcGIS |
@@ -135,11 +144,11 @@ and says plainly when a country publishes nothing machine-readable.
 | `AR-OTHER` | Argentina oil & gas wells - resource type not reported | Secretaría de Energía de la Nación (Argentina) | WFS (FES) |
 | `AR-NQN` | Argentina - Neuquén province wells incl. Vaca Muerta (provincial registry, more detail than AR-*) | Provincia del Neuquén - Subsecretaría de Energía, Minería e Hidrocarburos | WFS |
 | `BR-SIAGAS` | Brazil groundwater wells incl. deep and thermal wells (SIAGAS national register) | Serviço Geológico do Brasil (SGB) - SIAGAS | WFS |
-| `BO` | Bolivia oil & gas wells | Ministerio de Hidrocarburos y Energías de Bolivia (Viceministerio de Exploración y Explotación) | ArcGIS |
 | `CO-GEO` | Colombia deep oil & gas wells with bottom-hole temperatures and geothermal gradients | Servicio Geológico Colombiano (Mapa Geotérmico de Colombia, ANH well data) | ArcGIS |
 | `PY` | Paraguay petroleum wells (all ~50 drilled since 1947) | Viceministerio de Minas y Energía de Paraguay | ArcGIS |
 | `SR` | Suriname wells in Staatsolie's data room (mostly offshore exploration) | Staatsolie Maatschappij Suriname (state oil company) - GeoPortal | ArcGIS |
 | `EC` | Ecuador oil & gas wells (unofficial copy of the 2020 ministry consolidation) | Ecuador Ministry of Energy (MERNNR) well data, 2020, re-hosted on ArcGIS Online by GEOcentro, Universidad San Francisco de Quito | ArcGIS |
+| `BO-MHE` | Bolivia oil & gas wells (Ministry of Hydrocarbons and Energy, CNIH well list) | Ministerio de Hidrocarburos y Energías (Bolivia) - Centro Nacional de Información Hidrocarburífera (CNIH) well list | ArcGIS |
 
 ### Europe
 
@@ -171,8 +180,11 @@ and says plainly when a country publishes nothing machine-readable.
 | `GB-BGS-HC` | UK onshore hydrocarbon wells incl. Scotland (BGS index) | British Geological Survey - onshore hydrocarbon well data index | ArcGIS |
 | `BE-DOV` | Belgium (Flanders) borehole database incl. the Balmatt deep geothermal wells | Databank Ondergrond Vlaanderen (DOV) - Flemish Government | WFS |
 | `DK-DEEP` | Denmark deep onshore wells (GEUS Jupiter database) | GEUS - Geological Survey of Denmark and Greenland (Jupiter) | WFS (FES) |
-| `GL-GEUS` | Greenland petroleum wells (onshore Nuussuaq and offshore West Greenland) | GEUS - Geological Survey of Denmark and Greenland (Samba) | WFS (FES) |
+| `DK-GEO` | Denmark geothermal wells and geothermal evaluations of deep wells (GEUS Samba), with their reports | GEUS - Geological Survey of Denmark and Greenland (Samba) | GEUS WFS, fetched whole |
+| `GL-GEUS` | Greenland petroleum wells and cores (onshore Nuussuaq, offshore West and North-East Greenland) | GEUS - Geological Survey of Denmark and Greenland (Greenland drillhole localities) | GEUS WFS (whole layer) |
 | `EU-DARLINGE` | Danube-region geothermal wells (Hungary, Romania, Slovenia, Croatia, Serbia, Bosnia) - DARLINGe | DARLINGe Interreg project (national geological surveys), hosted by the Geological Survey of Slovenia | ArcGIS |
+| `HU-HUGEO` | Hungary borehole archive (all purposes, incl. ~8,400 hydrocarbon wells and thermal-water wells) | Hungarian Geological Survey (HUGEO, formerly MBFSZ) - borehole archive (Adattári fúrások) | ArcGIS |
+| `HU-HUGEO-GEO` | Hungary thermal-water well cadastre (outflow and bottom-hole temperatures, yield, aquifer) | Hungarian Geological Survey (HUGEO) - National Geothermal System (OGRe) thermal well cadastre | ArcGIS map service, fetched whole |
 | `CH-SWISSTOPO` | Switzerland deep wells over 500 m (hydrocarbon, geothermal, salt, thermal water, research) | swisstopo - Federal Office of Topography (geo.admin.ch) | geo.admin.ch API |
 | `EU-GSEU` | Pan-European deep boreholes with bottom-hole temperatures (25 national surveys) | Geological Service for Europe (GSEU) via EGDI | WFS (FES) |
 
@@ -196,6 +208,7 @@ and says plainly when a country publishes nothing machine-readable.
 | `TH-DMF` | Thailand oil & gas wells, onshore and Gulf of Thailand (2003 to date) | Department of Mineral Fuels (DMF), Ministry of Energy, Thailand | ArcGIS |
 | `IL-GII` | Israel oil & gas wells, onshore and offshore (2015 snapshot) | Geophysical Institute of Israel - National Geophysical Data-Base | ArcGIS |
 | `JO-MEMR` | Jordan petroleum wells | Ministry of Energy and Mineral Resources of Jordan (petroleum opportunities map) | ArcGIS |
+| `JP-GSJ-GT4` | Japan borehole temperatures at 500, 1,000, 1,500 and 2,000 m (GSJ Geothermal Potential Map GT-4) | Geological Survey of Japan (AIST) - Digital Geoscience Map GT-4, Geothermal Potential Map of Japan (2009) | static GeoJSON files |
 
 ### Oceania
 
@@ -205,8 +218,8 @@ and says plainly when a country publishes nothing machine-readable.
 | `NZ-WAIKATO` | Waikato geothermal wells (Taupō Volcanic Zone, incl. deep production wells) | Waikato Regional Council (National Wells Database) | ArcGIS |
 | `NZ-BOP` | Bay of Plenty geothermal bores (Rotorua, Tauranga...) | Bay of Plenty Regional Council | ArcGIS |
 | `AU-GA` | Australia national borehole database (petroleum, coal-seam gas, geothermal, stratigraphic) | Geoscience Australia | WFS |
-| `AU-SA-PET` | South Australia petroleum wells (Cooper/Eromanga...) | Government of South Australia, Department for Energy and Mining (SARIG) | WFS |
-| `AU-SA-GEO` | South Australia geothermal wells (incl. Habanero) | Government of South Australia, Department for Energy and Mining (SARIG) | WFS |
+| `AU-SA-PET` | South Australia petroleum wells (Cooper/Eromanga...) | Government of South Australia, Department for Energy and Mining (SARIG) | ArcGIS |
+| `AU-SA-GEO` | South Australia geothermal wells (incl. Habanero) | Government of South Australia, Department for Energy and Mining (SARIG) | ArcGIS |
 | `AU-QLD-PET` | Queensland petroleum wells | Geological Survey of Queensland | ArcGIS |
 | `AU-QLD-CSG` | Queensland coal-seam-gas wells | Geological Survey of Queensland | ArcGIS |
 | `AU-QLD-GEO` | Queensland geothermal heat-flow bores | Geological Survey of Queensland | ArcGIS |
@@ -225,20 +238,21 @@ and says plainly when a country publishes nothing machine-readable.
 - **Central American geothermal** - El Salvador, Honduras, Nicaragua, Costa Rica, Panama: no public geothermal well service found (Ahuachapán, Berlín, Momotombo, San Jacinto-Tizate, Miravalles are operator-held). Project level: search_gem_projects.
 - **Mexico (geothermal)** - CFE publishes no geothermal well data (Cerro Prieto, Los Azufres, Los Humeros). Oil & gas wells are in MX (a 2024 snapshot). The former CNH map (mapa.hidrocarburos.gob.mx) is offline.
 - **Ecuador (official)** - The hydrocarbon regulator's geoportal requires a login and the open-data API refuses scripts; EC is an unofficial university-hosted copy of the ministry's 2020 well list.
+- **Bolivia** - Bolivia's national well list (CNIH, about 2,100 wells) is in BO-MHE, published by the Ministry of Hydrocarbons and Energy in November 2026. A second layer in the same ministry service (GATC/YPFB, about 1,930 wells with production figures) is not used: its operator is a bare code. Field level: search_gem_projects.
 - **Trinidad & Tobago** - The Ministry of Energy publishes PDF data-package listings for bid rounds and an ArcGIS Online map of blocks and fields, but no well layer.
 - **Chile (geothermal)** - No geothermal well service found (Cerro Pabellón is operator-held); open-data and ministry GIS searches return nothing.
 - **Uruguay, Guyana, Dominican Republic, Venezuela, Cuba, Jamaica** - No keyless official well service found: Uruguay's mining geoportal has groundwater bores only, Guyana publishes blocks and FPSO locations, the Dominican Republic a dozen historic well and seep points without ids or depths, and the others nothing machine-readable.
-- **Oregon oil & gas, Maryland, Georgia, the Carolinas, New Jersey, Minnesota, Wisconsin** - No live well service: Oregon's oil & gas permits (Mist gas field) are a dated .xls download (OR-GEO has its geothermal wells), and the others publish PDF circulars or nothing. Their orphaned wells, if any, are in US-ORPHAN and their frac jobs in US-FRACFOCUS.
-- **Alberta (well details), PEI, Nunavut** - Alberta's AB source has every well's location and status but no names or licensees: AER's own map services are internal-only, and the details exist only as bulk files (ST37, 184 MB; Petrinex 'Well Licence', 18 MB zip; 'Well Infrastructure', 67 MB zip). Prince Edward Island and the Arctic islands (Nunavut) publish no well layer; the federal frontier-wells services need a token.
-- **Turkey** - MTA's earth-science viewer exposes no data endpoint; no public well service found. Some Turkish boreholes may appear in EU-GSEU.
-- **Hungary, Austria, Romania, Greece, Spain, Bulgaria, Serbia, the Baltics, Ukraine** - No national keyless deep-well service found: Hungary's geothermal well cadastre server is broken, Spain's IGME layer has only names and basins, Austria publishes thermal springs and a core store, Estonia's service blocks text search, and Ukraine's well register sits behind the e-subsoil login. EU-GSEU carries deep boreholes (many geothermal, with bottom-hole temperatures) from these surveys, and EU-DARLINGE adds Hungarian, Romanian and Serbian thermal-water wells.
+- **Maryland, Georgia, the Carolinas, New Jersey, Minnesota, Wisconsin** - No live well service: these states publish PDF circulars or nothing. Their orphaned wells, if any, are in US-ORPHAN and their frac jobs in US-FRACFOCUS.
+- **Alberta (well details), PEI, Nunavut** - Alberta's AB source has every well's location and status. Licensees of the ~238,000 abandoned wells are in AB-AER-ABANDONED, and well names as of December 2016 in AB-NAMES-2016; both carry the AER licence number. Current names and licensees of active wells exist only as bulk files (ST37, 184 MB; Petrinex 'Well Licence', 18 MB zip; 'Well Infrastructure', 67 MB zip). Prince Edward Island and the Arctic islands (Nunavut) publish no well layer; the federal frontier-wells services need a token.
+- **Turkey** - MTA's earth-science viewer serves faults, earthquakes, landslides and geology over WFS, but no well or geothermal-well layer; no public well service found. Some Turkish boreholes may appear in EU-GSEU.
+- **Austria, Romania, Greece, Spain, Bulgaria, Serbia, the Baltics, Ukraine** - No national keyless deep-well service found: Spain's IGME layer has only names and basins, Austria publishes thermal springs, a core store and the 2013 TRANSENERGY cross-border borehole set (about 1,000 boreholes in the western Pannonian basin, not used), Estonia's service blocks text search, and Ukraine's well register sits behind the e-subsoil login. EU-GSEU carries deep boreholes (many geothermal, with bottom-hole temperatures) from these surveys, and EU-DARLINGE adds Romanian and Serbian thermal-water wells. Hungary: HU-HUGEO and HU-HUGEO-GEO.
 - **Gulf states, Iraq, Iran, Kazakhstan, Mongolia** - No public well service: the Saudi Geological Survey's data services need a token, Kazakhstan's subsoil-fund GIS is unreachable, and the national oil companies publish nothing machine-readable. Field level: search_gem_projects; heat flow: search_heat_flow.
 - **Indonesia (geothermal)** - The energy ministry's geoportal publishes geothermal prospects and working areas but no wells. ID-MIGAS is oil and gas.
 - **Kenya** - No official machine-readable registry. Petroleum exploration wells: KE-PET, an unofficial copy of the State Department for Petroleum's map. Geothermal wells (Olkaria, Menengai) are held by KenGen and GDC, whose GIS hosts are not public; some Olkaria research data is in the DOE GDR (search_geothermal_datasets); heat flow and temperature gradients across the Kenya Rift: search_heat_flow; plant level: search_gem_projects.
 - **Namibia** - No public well registry. The Ministry of Mines and Energy's petroleum licence layers (Landfolio cadastre) need a token, and NAMCOR sells E&P data (incl. the offshore Orange Basin discoveries). Heat flow: search_heat_flow; field level: search_gem_projects.
-- **Uganda, Ghana, Nigeria, Ethiopia, Egypt and the rest of Africa without a source** - No keyless official well service found. Uganda's (PAU) and Ghana's (GNPC) ArcGIS Online well layers answer 'Token Required' - apparently lapsed subscriptions, so they may return. Egypt's and Nigeria's data repositories need a login; Morocco, Tunisia and the others publish licences, blocks or nothing. Heat flow: search_heat_flow; field level: search_gem_projects.
+- **Uganda, Ghana, Nigeria, Ethiopia, Egypt and the rest of Africa without a source** - No keyless official well service found. Uganda's (PAU) and Ghana's (GNPC) ArcGIS Online well layers answer 'Token Required' (PAU's ArcGIS Online subscription is disabled; checked November 2026), so they may return. Egypt's and Nigeria's data repositories need a login; Morocco, Tunisia and the others publish licences, blocks or nothing. Heat flow: search_heat_flow; field level: search_gem_projects.
 - **New Zealand (national geothermal database)** - GNS Science's GGW database is a click-through web app whose terms allow internal use only (no publishing), so it is not used. Geothermal wells come from regional councils instead: NZ-WAIKATO and NZ-BOP. NZP&M petroleum wells are in NZ-PET.
-- **Japan** - Not yet supported: the Geological Survey of Japan publishes borehole temperatures (GT-4) only as static GeoJSON files; no well registry service found.
+- **Japan** - No well registry service found. Borehole temperatures at 500 to 2,000 m from GSJ's Geothermal Potential Map (GT-4, about 3,000 boreholes) are in JP-GSJ-GT4. Oil and gas wells (METI/JOGMEC basic wells) are not published as data.
 - **Philippines, India, Malaysia, Pakistan and the rest of South and East Asia without a source** - No keyless well service found: India's national data repository and Pakistan's PPIS need a login, the Philippine DOE's GIS times out, Timor-Leste's data sit in a virtual data room, Taiwan's files are behind a bot block, and the others publish PDFs or nothing.
 
 <!-- coverage:end -->
@@ -248,9 +262,10 @@ and says plainly when a country publishes nothing machine-readable.
 | Tool | What it does |
 |---|---|
 | `list_sources` | Coverage index; pass `country`, `state` or `source` for endpoints, filters, id types, caveats and licences, plus notes on places with no registry |
-| `search_wells` | Search by operator, well name, county/area, field, status or type in one source, a state, a country, or everywhere. `count_only` sizes a query first |
-| `get_well` | One well's full raw record by identifier. US API numbers in any format are routed to the right state by their 2-digit API prefix, and also return the well's FracFocus frac jobs (with the chemical list), borehole temperatures and orphaned-well listing where they exist; UWIs, wellbore names and agency codes work with `country` or `source` |
-| `wells_near` | Every well within a radius of a point. Only sources whose coverage area overlaps the circle are asked, so it works anywhere without picking a source |
+| `search_wells` | Search by operator, well name, county/area, field, status or type in one source, a state, a country, or everywhere. `count_only` sizes a query first. Name searches are forgiving and come back best match first (see below) |
+| `match_well` | Identify the registry record for a well known by a working name, plus whatever else is known (operator, field, county, a position, a spud date). Ranked candidates with the evidence for each and a confidence: strong, probable, ambiguous or weak |
+| `get_well` | One well's full raw record by identifier. US API numbers in any format are routed to the right state by their 2-digit API prefix (a 10-digit API returns every bore of the well, sidetracks included), and also return the well's FracFocus frac jobs (with the chemical list), borehole temperatures and orphaned-well listing where they exist. Other ids (wellbore names, agency codes) match whatever their spacing, punctuation, case or zero padding (`15/9-19A` = `15/9-19 A`, `AWG-1` = `AWG-01`), best with `country` or `source`; Canadian UWIs in any common spelling go to the Canadian sources. When no record has the id exactly, records whose id holds it as whole words come back as `partialMatches` with `found: false` |
+| `wells_near` | The wells nearest a point, within a radius, nearest first. Only sources whose coverage area overlaps the circle are asked, so it works anywhere without picking a source |
 | `list_operators` | The exact operator strings a source uses (`'Fervo Energy Company'`, `'Equinor Energy AS'`...) |
 | `raw_query` | Raw SQL-92 `where` (ArcGIS sources) or CQL (GeoServer WFS sources) for filters the normalized search doesn't cover - dates, depths, cumulative production |
 | `search_geothermal_datasets` | DOE geothermal datasets: text search via OSTI, or - given a latitude/longitude - the Geothermal Data Repository catalog's footprints, returning datasets that cover the place with direct file links (Cape Station, Utah FORGE, Newberry...) |
@@ -268,23 +283,92 @@ latitude, longitude, spudDate` plus whatever else the source publishes
 
 - `api` holds the source's well identifier: a US API number, Canadian UWI, Norwegian
   wellbore name, BSS code and so on. `list_sources` says which, per source.
+- Where a registry stores status or type as codes, the record shows the meaning and
+  keeps the code in `statusCode` / `wellTypeCode`; a filter word finds the codes whose
+  meaning holds it (`Suspended` finds `SUSP`), and a code typed as such matches exactly
+  (`A` does not find `PA`).
 - Coordinates are WGS84 decimal degrees, taken from the server-reprojected geometry
   (attribute coordinates are often NAD27, ED50 or sign-flipped).
 - Every `*Date` field is an ISO `YYYY-MM-DD` string or null, whatever the source
   stores (epoch milliseconds, `MM/DD/YYYY`, `DD.MM.YYYY`, `16-NOV-2017`...).
 - Units are the agency's: most US sources use feet, most others metres. Sources that
-  mix units carry a `depthUnit` field.
+  mix units carry a `depthUnit` field; elevation fields carry their unit in the name
+  (`kbElevationFt`, `groundElevationM`) or follow `depthUnit`. Measured values are
+  rounded to seven significant digits, so storage noise (`1219.199951171875`) does not
+  show; positions keep every digit the source gives.
+- Placeholder values a registry uses for "unknown" (`9999-12-31`, `1800-01-01`, `-999`,
+  `No Data Available`) come back as null.
 - A source that cannot apply a filter you asked for is skipped with a note rather than
   returning unfiltered results.
 
+### Well names
+
+The same well is `K & L 2-9` to the regulator, `K&L #2-9 RD1` on the mud log and
+`1-7` on the rig. A `well_name` search first looks for the text as typed. If that finds
+nothing it tries again ignoring punctuation, `#`, `No.`, zero padding and a sidetrack or
+redrill suffix, and, when only a few sources are being asked, twice more: the well
+number alone under any lease (federal leases are often filed by serial number:
+`RVF 62-30` is `CA-12345 62-30`), then the name's longest word (`Garnet 4B` is filed
+as `Garnet 4`, `West Harbor 2` as `W HARBOR 2`). Where a registry keeps lease and
+well number in separate fields (California, Wyoming, Oklahoma, Kansas, Louisiana and
+others) every step matches the lease, the number, or both run together.
+
+Results carry `nameMatch`, 0 to 1, and are sorted by it:
+
+| nameMatch | Means |
+|---|---|
+| 1 | The same name once case, punctuation and padding are set aside |
+| 0.95 | The same with initials spelled out (`PCU D1` = `Pine Creek Unit D1`) |
+| 0.9 | The record's name ends with what you typed: the lease was left off |
+| 0.7 - 0.85 | The same well number under a differently worded lease |
+| 0.5 - 0.6 | A partial match: the lease alone, or a short number with no lease to confirm it |
+
+`match_well` combines that score with distance and spud date when you can give them,
+and says how sure it is: **strong** when the name fits, the position or spud date agrees
+and nothing else comes close; **probable** for a clear best candidate on the name alone
+(two wells in a state can carry the same name); **ambiguous** when several records fit
+equally; **weak** otherwise. Operator, field and county are used to narrow searches and
+as supporting evidence, never to rule a well out: operators change hands.
+
+### Wells near a point
+
+A server answers a radius request with the wells in the circle in no particular order,
+and only as many as fit in one answer. In a dense field a 2 km circle holds thousands,
+so the nearest wells would usually be missing. `wells_near` and `match_well` therefore
+ask again closer in until an answer comes back whole, and build the list from that. When
+this happens the source's result carries `completeWithinKm`: every well within that
+distance is listed, anything farther is a sample of what lies beyond (0 means no closer
+answer came back whole and the whole list is a sample). A sparse area costs one request
+as before.
+
+### When a source is slow or down
+
+A call that asks several sources waits at most 25 seconds (`WELL_DATA_BUDGET_MS`), then
+answers with what has come back. Sources that failed or ran out of time are listed in
+`sourceErrors`, and the answer is marked `incomplete: true`: "not found" then means
+"not found in the sources that answered". Ask again with `source=<KEY>` to wait for one
+source as long as it takes. Requests are retried once on connection failures and on
+HTTP 429, 502, 503 and 504.
+
+The requests still running for a late source are dropped when the call answers (or when
+the client cancels), so they do not hold up the next call to the same server. A server
+that fails three times in a row (no connection, a timeout, 502/503/504) is skipped for
+two minutes: requests to it fail at once with an error that says so, instead of each
+waiting out a timeout. Any real answer from it lets it back in.
+
+Lookup tables that some sources need (BOEM's company names, FracFocus's operator list),
+the GDR catalog and the snapshot sources are kept on disk (`WELL_DATA_CACHE_DIR`), so a
+new process starts from the last download, and an outage at the agency serves the last
+good copy.
+
 ## Run / register
 
-Requires **Node 18+** (native `fetch`, top-level `await`); developed on Node 22.
+Requires **Node 20+**; developed on Node 22 and run on Node 26.
 
 ```
 npm install
 npm test               # offline unit tests
-npm run smoke          # live: search + id lookup + radius search against every source
+npm run smoke          # live: search, id lookup, name lookup and radius search against every source
 npm run smoke -- NO UT # just some sources (matches key, country or state)
 claude mcp add --scope user well-data -- node <abs-path>/src/index.js
 ```
@@ -292,16 +376,77 @@ claude mcp add --scope user well-data -- node <abs-path>/src/index.js
 `claude mcp add` stores that absolute path in `~/.claude.json`; moving the project
 folder breaks the registration until you run it again.
 
-A search with no country or source asks all of the 160-odd services at once. Node
-resolves host names on a pool of 4 threads, which then becomes the bottleneck the first
-time; registering with `-e UV_THREADPOOL_SIZE=32` (before `--`) roughly halves those
-searches. The server cannot raise it itself, because Node starts the pool before any
-code runs. Any other MCP client can launch
+A search with no country or source asks all of the 170-odd services at once. Node
+resolves host names on a thread pool that defaults to 4 threads; the server raises it to
+32 before doing any work, which roughly halves those searches. Set `UV_THREADPOOL_SIZE`
+in the client's environment to choose another size. Any other MCP client can launch
 `node src/index.js` over stdio the same way. `package.json`'s `bin` entry means
 `npx -y well-data-mcp` will work if the package is ever published to npm (it isn't yet).
 
-`node scripts/call-tool.js <tool> '<json args>'` calls one tool over stdio, the way an
-MCP client would - handy for trying a query from a terminal.
+### Over HTTP
+
+`node src/index.js --http [host:]port` serves the same tools over Streamable HTTP at
+`http://host:port/mcp` (the host defaults to `127.0.0.1`), so one long-running server
+can answer many clients and machines with its caches warm. It is stateless: every
+request stands alone and answers with plain JSON, so a restart is invisible to clients
+and any reverse proxy works.
+
+```
+node src/index.js --http 8110                          # loopback only
+node src/index.js --http 0.0.0.0:8110 --token-file ~/.config/well-data-mcp/token
+claude mcp add --scope user --transport http well-data http://127.0.0.1:8110/mcp
+claude mcp add --scope user --transport http well-data https://wells.example.net/mcp --header "Authorization: Bearer <token>"
+```
+
+- `GET /healthz` answers without a token: version, coverage, requests running and
+  waiting, the last source check (`sourceCheck`) and any servers being skipped.
+- `GET /sources`: the last source check in full. Once a day (`--check-hours`,
+  `WELL_DATA_CHECK_HOURS`; 0 turns it off) the server asks every source its probe query,
+  so a registry that moved or broke shows here before a user runs into it. Every hour it
+  also refreshes any expired lookup table or snapshot layer in the background.
+- `--token-file` (or `WELL_DATA_HTTP_TOKEN_FILE`, `WELL_DATA_HTTP_TOKEN`) makes `/mcp`
+  require `Authorization: Bearer <token>`. Use one whenever the port is reachable from
+  anything you do not control. Without a token, `/mcp` answers only requests addressed to
+  an IP address, `localhost` or the listen host (so a web page cannot reach it through
+  DNS rebinding); list other host names in `WELL_DATA_HTTP_ALLOWED_HOSTS`, comma-separated.
+- `--max-calls N` (`WELL_DATA_HTTP_MAX_CALLS`, default 8) requests are handled at once;
+  up to eight times as many wait, and past that the server answers 503 with Retry-After.
+  Bodies over 1 MB get 413. SIGTERM finishes the requests in hand, then stops.
+
+### From a script
+
+`node scripts/call-tool.js <tool> '<json args>'` calls one tool the way an MCP client
+would - handy for trying a query from a terminal. For many lookups from a script,
+`node scripts/call-tool.js --batch < calls.jsonl > results.jsonl` runs them through one
+server, four at a time (`--concurrency N`): each input line is
+`{"tool": "match_well", "args": {...}, "id": "anything"}`, each output line the parsed
+result with the same `id`, in input order. Environment variables set for `call-tool.js`
+reach the server it starts.
+
+By default `call-tool.js` starts its own server over stdio. `--url http://host:port/mcp`
+(or `WELL_DATA_MCP_URL`; a token in `--token-file`, `WELL_DATA_MCP_TOKEN_FILE` or
+`WELL_DATA_MCP_TOKEN`) uses a running HTTP server instead, whose caches are already warm.
+A machine that runs one for a checkout can say so once, in
+`~/.config/well-data-mcp/client.json` (`$XDG_CONFIG_HOME` is honoured):
+
+```json
+{"servers": [{"checkout": "/path/to/well-data-mcp", "url": "http://127.0.0.1:8110/mcp"}]}
+```
+
+`call-tool.js` from that checkout then uses the server, while copies elsewhere (a
+development clone) keep starting their own; `--local` always starts its own. If the
+server cannot be reached, or goes away mid-batch (a restart), the calls carry on through
+a local server, with a note on stderr.
+
+Environment:
+
+| Variable | What it sets |
+|---|---|
+| `WELL_DATA_BUDGET_MS` | How long a multi-source call waits before answering with partial results (default 25000) |
+| `WELL_DATA_CACHE_DIR` | Where downloaded lookup tables, the GDR catalog and snapshot sources are kept between runs (default: `well-data-mcp-cache` in the OS temp folder; `off` keeps them in memory only) |
+| `UV_THREADPOOL_SIZE` | Node's DNS thread pool (default 32 here); speeds up searches across every source |
+| `WELL_DATA_HTTP`, `WELL_DATA_HTTP_TOKEN_FILE`, `WELL_DATA_HTTP_MAX_CALLS`, `WELL_DATA_HTTP_ALLOWED_HOSTS`, `WELL_DATA_CHECK_HOURS` | HTTP mode (see above) |
+| `WELL_DATA_MCP_URL`, `WELL_DATA_MCP_TOKEN_FILE` | Where `call-tool.js` finds a running HTTP server |
 
 ## Adding a source
 
@@ -314,17 +459,22 @@ uses it). The protocol is a `kind`:
   `…/rest/services?f=json`, then a layer's fields with `…/MapServer/<id>?f=json`.
   Options cover common server quirks: `noPaging`, `noReproject`, `nearAsEnvelope`,
   `apiNumeric`, `apiDigits14`, `dedupeBy` + `orderBy`, `baseWhere`, `fallbackUrl`,
-  `headers`, `outFields` (see `src/providers/arcgis.js`).
+  `headers`, `outFields` (see `src/providers/arcgis.js`). Set `wellNumberField` when
+  the layer keeps the well number apart from the lease name, `wellNameAlso` when its
+  name field is often empty, and `apiPattern` when it holds only some of a state's API
+  numbers (federal offshore).
 - `wfs` - OGC WFS 2.0 with GeoJSON output: `dialect: "cql"` for GeoServer,
   `dialect: "fes"` for MapServer, deegree and others that ignore CQL. `bboxAttrs` for a
   layer whose spatial filters return nothing, `sortBy` where paging needs a sort.
 - `rrc-ewa` - the Texas RRC wellbore query (operator, lease and field for Texas).
 - `snapshot` - a small layer fetched whole by the source's `load()` (an API with no
-  attribute filter, a static GeoJSON or CSV file) and searched in memory; refetched
-  every 12 h (`ttlMs`). Fine up to a few tens of thousands of records.
+  attribute filter, a static GeoJSON or CSV file, a spreadsheet) and searched in
+  memory; refetched every 12 h (`ttlMs`) and kept on disk between runs. Fine up to a
+  few tens of thousands of records. `src/zip.js`, `src/dbf.js`, `src/csv.js` and
+  `src/xls.js` (old binary Excel) read the usual download formats without dependencies.
 - `fracfocus` - the FracFocus disclosure API.
 
-Run `npm run smoke -- <KEY>` until search, id and radius checks pass, then
+Run `npm run smoke -- <KEY>` until search, id, name and radius checks pass, then
 `npm run readme` to refresh the tables and the map above.
 
 ## Data licences and attribution
@@ -340,6 +490,12 @@ agency states one. Notably:
   for reuse, take the download.
 - **Ecuador** (`EC`): an unofficial university-hosted copy marked for viewing. Query it
   live; don't republish it.
+- **Alberta** (`AB-AER-ABANDONED`): AER's copyright and disclaimer terms apply (no open
+  licence stated). `AB-NAMES-2016` is a US DOE NETL compilation of AER's 2016 list.
+- **Japan** (`JP-GSJ-GT4`): GSJ Terms of Use (Government of Japan Standard Terms of Use
+  2.0, compatible with CC BY 4.0): cite "Geological Survey of Japan, AIST".
+- **Bolivia** (`BO-MHE`) and **Hungary** (`HU-HUGEO`, `HU-HUGEO-GEO`): published openly by
+  the ministry and the survey, with no licence stated.
 - **UK** (NSTA): NSTA Open User Licence. **Ontario / Canada (NRCan)**: Open Government
   Licence. **Alberta** (AER/AGS): Open Government Licence - Alberta. **Argentina**
   (Secretaría de Energía), **Colombia** (SGC), **Victoria, NSW, Northern Territory,

@@ -1,7 +1,7 @@
 // FracFocus: the national registry of hydraulic-fracturing chemical disclosures, run by
 // the Ground Water Protection Council and the Interstate Oil & Gas Compact Commission.
 // Over 20 states make it their official disclosure filing. Each record is one frac job on
-// one well (API number, operator, location, job dates, true vertical depth, water volume);
+// one well (API number, operator, location, job end date, true vertical depth, water volume);
 // get_well returns the job's full chemical list.
 
 import { API_STATE_CODES } from "../api-number.js";
@@ -29,14 +29,16 @@ export const FRACFOCUS_SOURCES = [
     license:
       "FracFocus terms: site content may not be republished or used commercially; the bulk data download (fracfocus.org/data-download) may be used without restriction if unaltered. Query it live; for reuse, take the download.",
     caveat:
-      "Frac jobs since 2011, as reported by operators - not a well registry: wells never fractured are absent and a refractured well appears once per job. operator matches FracFocus's own operator names (up to 20 matching names are asked). No status or field; county is reported but cannot be filtered on. depthTVD is in feet, baseWaterVolumeGal in US gallons. get_well (US API number) adds the chemical list: ingredient, CAS number, % of the frac fluid, mass.",
+      "Frac jobs since 2011, as reported by operators - not a well registry: wells never fractured are absent and a refractured well appears once per job. operator matches FracFocus's own operator names (up to 20 matching names are asked). No status or field; county is reported but cannot be filtered on. depthTVD is in feet, baseWaterVolumeGal in US gallons. Dates: jobEndDate only - FracFocus's API does not return the job start date. api is the API number undashed, as FracFocus files it (14 digits). get_well (US API number) adds the chemical list: ingredient, CAS number, % of the frac fluid, mass, and a disclosureId that tells two jobs on one well apart.",
     searchFields: {
       api: "APINumber",
       well_name: "WellName",
       operator: "OperatorClean",
     },
     normalize: (a, g) => ({
-      api: a.APINumber,
+      // The search endpoint gives '42135442140000', the disclosure endpoint '42-135-44214-00-00': one shape for both.
+      api: a.APINumber ? String(a.APINumber).replace(/\D/g, "") : null,
+      ...(a.pKey ? { disclosureId: a.pKey } : {}), // full disclosures only (get_well); search rows carry none
       wellName: a.WellName,
       operator: a.OperatorClean,
       status: null,
@@ -45,7 +47,6 @@ export const FRACFOCUS_SOURCES = [
       stateName: a.StateName,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
-      jobStartDate: usDateToIso(a.JobStartDate),
       jobEndDate: usDateToIso(a.JobEndDate),
       depthTVD: nz(a.TVD),
       depthUnit: "ft",

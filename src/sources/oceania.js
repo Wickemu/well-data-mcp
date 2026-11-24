@@ -1,58 +1,75 @@
 // New Zealand and Australia. Every endpoint and field name below was verified against
 // a live response on 2026-10-06.
 
-import { msToIso, isoDate, usDateToIso, coord, num, geomFirst } from "./normalize.js";
+import { msToIso, localMidnightToIso, isoDate, usDateToIso, coord, num, geomFirst } from "./normalize.js";
 import { fetchJson } from "../http.js";
 
 const nz = (v) => num(v, { zeroIsNull: true });
 const AUSTRALIA = [112.0, -45.0, 155.0, -9.0];
 
-// South Australia's petroleum and geothermal layers share one schema.
-function sarig({ key, typeName, label, probe, caveat }) {
+// BOPRC stores NZ local midnight: 11:00Z (NZDT) or 12:00Z (NZST) the day before. Rounding to the
+// nearest UTC midnight would send the 11:00Z ones back a day, so shift past NZ's largest offset.
+export const nzLocalDate = (v) => (v == null || v === "" ? null : msToIso(Number(v) + 13 * 3_600_000));
+
+// Waikato's database uses 1899-12-31 for "no date" (its only value before 1901).
+const waikatoDate = (v) => {
+  const d = msToIso(v);
+  return d && d >= "1900-01-01" ? d : null;
+};
+
+// South Australia's petroleum and geothermal wells, from the SARIG map viewer's ArcGIS
+// service (the drillholes WFS workspace was withdrawn in November 2026). The URL form is
+// SARIG's own: /ArcGIS/SARIG/..., not /rest/services. The viewer's identify service holds
+// the same layers under the same ids, as a fallback.
+const SARIG = "https://map.sarig.sa.gov.au/ArcGIS/SARIG";
+
+function sarig({ key, layer, layerName, label, probe, caveat }) {
   return {
     key,
     country: "AU",
     state: "SA",
-    kind: "wfs",
     label,
     probe,
+    layerName, // found again by name if SARIG renumbers its 600-layer service
     agency: "Government of South Australia, Department for Energy and Mining (SARIG)",
-    url: "https://services.sarig.sa.gov.au/vector/drillholes/wfs",
-    typeName,
-    geometryName: "WKB_GEOMETRY",
-    sortBy: "DRILLHOLE_NO",
+    url: `${SARIG}/sarig_map/MapServer/${layer}`,
+    fallbackUrl: `${SARIG}/sarig_identify_query/MapServer/${layer}`,
     pageMax: 2000,
     idKind: "id",
     idLabel: "SARIG drillhole number",
+    apiNumeric: true, // DHDB is an integer
     extent: [129.0, -38.1, 141.0, -26.0],
     license: "CC BY 4.0",
     caveat,
     searchFields: {
-      api: "DRILLHOLE_NO",
-      well_name: "WELL_NAME",
+      api: "DHDB",
+      well_name: "WELLDISPLAY",
       operator: "OPERATOR",
       county: "BASIN",
       field: "NAME",
-      status: "STATUS_RIG_RELEASE",
-      well_type: "WELL_TYPE",
+      status: "STATUSRR",
+      well_type: "TYPE",
     },
     normalize: (a, g) => ({
-      // ~3% of petroleum wells have no drillhole number (stored as 0); WELL_ID is always set.
-      api: a.DRILLHOLE_NO ? String(a.DRILLHOLE_NO) : null,
+      // ~110 wells have no drillhole number; WELL_ID is always set.
+      api: a.DHDB ? String(a.DHDB) : null,
       wellId: a.WELL_ID ?? null,
-      wellName: a.WELL_NAME,
+      wellName: a.WELLDISPLAY,
       operator: a.OPERATOR,
-      status: a.STATUS_RIG_RELEASE,
-      wellType: a.WELL_TYPE,
+      status: a.STATUSRR,
+      wellType: a.TYPE,
       wellClass: a.CLASS,
       field: a.NAME,
       county: a.BASIN,
-      ...geomFirst(a, g, "LATITUDE__DEC", "LONGITUDE__DEC"),
-      spudDate: isoDate(a.SPUDDED),
-      rigReleaseDate: isoDate(a.RIG_RELEASE),
-      depthMD: nz(a.TD__M),
+      ...geomFirst(a, g, "Y", "X"),
+      spudDate: msToIso(a.SPUDDED),
+      rigReleaseDate: msToIso(a.RIGREL),
+      openFileDate: msToIso(a.WHENOPEN),
+      deviation: a.DEVIATION,
+      depthMD: nz(a.TD),
       depthUnit: "m",
-      tenement: [a.TENEMENT, a.TENNUM].filter(Boolean).join(" ") || null,
+      kbElevationM: nz(a.KB),
+      tenement: [a.TENEMENT, [a.TENNUM, a.TENNUM2].filter((n) => n != null).join("/")].filter(Boolean).join(" ") || null,
       access: a.SECURITY,
     }),
   };
@@ -90,12 +107,15 @@ function queensland({ key, layer, label, probe, baseWhere, caveat }) {
       status: a.status,
       wellType: a.bore_subtype || a.bore_type,
       result: a.result,
-      ...geomFirst(a, g, "latitude", "longitude"),
+      // The served geometry is snapped to a ~1/16384° grid (8-22 m off); prefer the agency's 6-decimal GDA94 attributes.
+      latitude: coord(a, "latitude", g, "y"),
+      longitude: coord(a, "longitude", g, "x"),
       rigReleaseDate: msToIso(a.rig_release_date),
-      depthMD: nz(a.total_depth_driller),
+      depthMD: nz(a.total_depth_driller) ?? nz(a.total_depth_logger),
       depthUnit: "m",
       tenure: [a.tenure_type, a.tenure_no].filter(Boolean).join(" ") || null,
-      reportUrl: a.company_report_link,
+      // company_report_link is always empty; the report page URL is in company_report_no.
+      reportUrl: a.company_report_link || (/^https?:\/\//.test(a.company_report_no ?? "") ? a.company_report_no : null),
       dataUrl: a.qdex_data_link,
     }),
   };
@@ -136,6 +156,8 @@ function nswDrillholes({ key, typeName, baseCql, label, probe, caveat }) {
       status: "well_status",
       well_type: "business_purpose",
     },
+    // The record shows operator || licence holder, so the operator filter searches both.
+    alsoSearch: { operator: "operator" },
     normalize: (a, g) => ({
       api: a.gsnsw_drill_id,
       wellName: a.hole_name,
@@ -146,8 +168,9 @@ function nswDrillholes({ key, typeName, baseCql, label, probe, caveat }) {
       wellType: a.business_purpose,
       purpose: a.hole_purpose,
       county: a.title,
-      latitude: g?.y ?? null,
-      longitude: g?.x ?? null,
+      // GeoServer rounds the geometry to 4 decimals (up to ~7 m); latgda94/longda94 are full precision.
+      latitude: coord(a, "latgda94", g, "y"),
+      longitude: coord(a, "longda94", g, "x"),
       drillYear: a.year_drilled ?? null,
       depthMD: nz(a.end_depth),
       depthUnit: "m",
@@ -227,9 +250,16 @@ export const OCEANIA_SOURCES = [
       county: null,
       latitude: coord(a, "Latitude", g, "y"),
       longitude: coord(a, "Longitude", g, "x"),
+      // NZP&M stores UTC midnight plus the NZ offset (12:00/13:00Z): the UTC day is the right one.
       spudDate: msToIso(a.Start_Date),
       endDate: msToIso(a.End_Date),
-      depthMD: a.Total_Depth_Public,
+      rigReleaseDate: msToIso(a.Rig_Release_Date),
+      result: a.Result_Public ?? null,
+      depthMD: nz(a.Total_Depth_Public),
+      depthUnit: "m",
+      elevationM: num(a.Elevation),
+      elevationRef: num(a.Elevation) == null ? null : [a.Reference_Point, a.Datum].filter(Boolean).join(" above ") || null,
+      sidetrack: a.Sidetrack && a.Sidetrack !== "0" ? a.Sidetrack : null, // '0' = the original hole
       permit: a.Permit,
       openFile: a.Open_File,
     }),
@@ -268,7 +298,7 @@ export const OCEANIA_SOURCES = [
       status: a.WELL_STATUS,
       wellType: a.WELL_TYPE,
       ...geomFirst(a, g, "ACTUAL_LATITUDE", "ACTUAL_LONGITUDE"),
-      spudDate: msToIso(a.DRILLING_DATE),
+      spudDate: waikatoDate(a.DRILLING_DATE),
       depthMD: nz(a.ACTUAL_DEPTH_DRILLED),
       maxTemperature: num(a.MAX_TEMPERATURE),
       aquifer: a.AQUIFER_TYPE,
@@ -293,6 +323,7 @@ export const OCEANIA_SOURCES = [
     caveat: "Consented geothermal bores; the Kawerau power-station wells are largely absent. Depths in metres, temperatures in deg C.",
     searchFields: {
       api: "BOPRC_Ref",
+      well_name: "BOPRC_Ref", // the bores have no other name
       field: "GeothermalField",
       status: "BoreStatus",
       well_type: "BoreUse",
@@ -306,8 +337,10 @@ export const OCEANIA_SOURCES = [
       purpose: a.Purpose,
       field: a.GeothermalField,
       ...geomFirst(a, g),
-      spudDate: msToIso(a.DrillingDate),
+      spudDate: nzLocalDate(a.DrillingDate),
       depthMD: nz(a.BoreDepth_m),
+      depthUnit: "m",
+      casingDepthM: nz(a.CasingDepth_m),
       temperatureC: num(a.BoreTemp_degC),
       consent: a.ConsentNumber,
     }),
@@ -331,11 +364,13 @@ export const OCEANIA_SOURCES = [
     idLabel: "GA borehole number (ENO)",
     extent: AUSTRALIA,
     license: "CC BY 4.0",
-    caveat: "National compilation (~52k boreholes, onshore and offshore). State sources (AU-SA-*, AU-QLD-*, AU-WA) are fresher and richer for their states. Lengths in metres.",
+    caveat:
+      "National compilation (~52k boreholes, onshore and offshore). State sources (AU-SA-*, AU-QLD-*, AU-WA) are fresher and richer for their states. field filters by basin / geological province (basin). Lengths in metres; elevationM is negative offshore (the seabed). reportUrl opens GA's borehole page.",
     searchFields: {
       api: "ENO",
       well_name: "NAME",
       operator: "OPERATOR",
+      field: "GEOLOGICAL_PROVINCES",
       status: "STATUS",
       well_type: "PURPOSE",
     },
@@ -346,10 +381,17 @@ export const OCEANIA_SOURCES = [
       status: a.STATUS,
       wellType: a.PURPOSE,
       ...geomFirst(a, g, "COLLAR_LAT_GDA94", "COLLAR_LONG_GDA94"),
+      alias: a.ALTERNATE_NAMES && a.ALTERNATE_NAMES !== a.NAME ? a.ALTERNATE_NAMES : null,
+      stateCode: a.STATE ?? null,
+      basin: a.GEOLOGICAL_PROVINCES ?? null,
       spudDate: isoDate(a.DRILLSTARTDATE),
       endDrillDate: isoDate(a.DRILLENDDATE),
+      rigReleaseDate: isoDate(a.RIG_RELEASE_DATE),
       depthMD: nz(a.BOREHOLELENGTH_M),
       depthUnit: "m",
+      elevationM: num(a.ELEVATION_M),
+      rig: a.RIG_NAME && a.RIG_NAME !== "Unknown" ? a.RIG_NAME : null,
+      reportUrl: a.BOREHOLE_REPORT_URI ?? null,
       startPoint: a.STARTPOINT,
       custodian: a.DATA_CUSTODIAN,
       uri: a.IDENTIFIER,
@@ -357,14 +399,16 @@ export const OCEANIA_SOURCES = [
   },
   sarig({
     key: "AU-SA-PET",
-    typeName: "drillholes:petroleum_wells",
+    layer: 69,
+    layerName: "Petroleum Wells",
     label: "South Australia petroleum wells (Cooper/Eromanga...)",
-    probe: { operator: "Delhi" }, // older wells: the layer sorts recent ones (no drillhole number yet) first
-    caveat: "Depths in metres. field is the field/prospect name. About 110 older wells have no drillhole number (id is null; find them by well_name).",
+    probe: { operator: "Delhi" },
+    caveat: "Depths in metres. field is the field/prospect name. About 110 wells have no drillhole number (id is null; find them by well_name): nearly all are confidential wells, which also show no spud date or status.",
   }),
   sarig({
     key: "AU-SA-GEO",
-    typeName: "drillholes:geothermal_wells",
+    layer: 58,
+    layerName: "Geothermal Wells",
     label: "South Australia geothermal wells (incl. Habanero)",
     probe: { well_name: "Habanero" },
     caveat: "Hot-rock and hot-sedimentary-aquifer geothermal wells. Depths in metres.",
@@ -408,6 +452,7 @@ export const OCEANIA_SOURCES = [
     license: "CC BY 4.0",
     caveat:
       "~1,600 wells, actively maintained, incl. Gippsland and Otway offshore and ~40 geothermal wells (type GT_WILDCAT); a few Bass Strait wells off SA, Tasmania and NSW too. status codes: P&A, PRODUCER, SUS...; type codes: D_HC_PROD, E_WILDCAT, E_APPRAISAL, GT_WILDCAT... field is the basin, county the title (lease). Depths in metres.",
+    wellNumberField: "well_number", // "BARRACOUTA" + "A10"
     searchFields: {
       api: "uwi",
       well_name: "well_name",
@@ -444,7 +489,7 @@ export const OCEANIA_SOURCES = [
     label: "New South Wales petroleum and coal-seam-gas wells",
     probe: { operator: "Santos" },
     caveat:
-      "~1,200 wells: ~900 coal-seam methane wells and the conventional petroleum and stratigraphic wells. operator is the licence holder where no operator is recorded. Year drilled only (no spud date). county is the petroleum title. Depths in metres.",
+      "~1,200 wells: ~900 coal-seam methane wells and the conventional petroleum and stratigraphic wells. operator is the licence holder where no operator is recorded; the operator filter matches either. Year drilled only (no spud date). county is the petroleum title. Depths in metres.",
   }),
   nswDrillholes({
     key: "AU-NSW-GEO",
@@ -483,7 +528,7 @@ export const OCEANIA_SOURCES = [
     },
     normalize: (a, g) => ({
       api: a.WELLNAME,
-      eno: a.ENO,
+      eno: a.ENO && a.ENO !== "0" ? a.ENO : null, // '0' on ~100 wells GA has not numbered
       wellName: a.WELLNAME,
       alias: a.WELL_ALIAS,
       operator: a.OPERATOR,
@@ -496,9 +541,14 @@ export const OCEANIA_SOURCES = [
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
       spudDate: usDateToIso(a.DT_SPUD),
+      tdDate: usDateToIso(a.DT_DEPTH),
       rigReleaseDate: usDateToIso(a.DT_RELEASE),
-      depthMD: nz(a.TOTAL_MEAS),
+      depthMD: nz(a.TOTAL_MEAS), // TOTAL_DEPTH is not a TVD (it can exceed the measured depth)
       depthUnit: "m",
+      elevationM: nz(a.ELEVATION),
+      elevationRef: nz(a.ELEVATION) == null || !a.DATUM_MEAS || a.DATUM_MEAS === "NR" ? null : a.DATUM_MEAS,
+      rig: a.DRILLRIG ?? null,
+      rigContractor: a.CONTRACTOR ?? null,
       reportSearchUrl: a.HANDLE_URL,
     }),
   },
@@ -518,7 +568,7 @@ export const OCEANIA_SOURCES = [
     extent: [[143.5, -44.0, 148.6, -39.4], [143.0, -41.5, 149.0, -38.0]],
     license: "CC BY 4.0 (Mineral Resources Tasmania)",
     caveat:
-      "The ~1,700 boreholes MRT classes as fuels (coal, oil shale and petroleum, incl. the Bass and Sorell offshore wells - the ~50 deeper than 1,000 m are essentially the petroleum wells) or geothermal (~45). operator is the drilling company; county searches the locality keywords. No status. Depths (hole length) in metres. detailUrl opens MRT's drilling record.",
+      "The ~1,700 boreholes MRT classes as fuels (coal, oil shale and petroleum, incl. the Bass and Sorell offshore wells - the ~50 deeper than 1,000 m are essentially the petroleum wells) or geothermal (~45). operator is the drilling company; county searches the locality keywords. No status. spudDate only where MRT dates the hole to the day (dateAccuracy Day); otherwise drillYear, and MRT's undated holes carry a nominal early-January date. For the Bass and Sorell offshore wells, AU-OFF and AU-GA hold the spud date. Depths (hole length) in metres. detailUrl opens MRT's drilling record.",
     searchFields: { api: "DRILL_ID", well_name: "NAME", operator: "COMPANY", county: "KEYWORDS", well_type: "PURPOSE" },
     normalize: (a, g) => ({
       api: a.DRILL_ID != null ? String(a.DRILL_ID) : null,
@@ -531,7 +581,15 @@ export const OCEANIA_SOURCES = [
       tenements: a.ASSOCIATED_TENEMENTS,
       latitude: g?.y ?? null,
       longitude: g?.x ?? null,
-      spudDate: msToIso(a.DATE_DRILLED),
+      ...(() => {
+        // MRT stores Hobart local midnight (13:00/14:00Z the day before; 14:10:44Z, local mean time, before 1895).
+        const drilled = localMidnightToIso(a.DATE_DRILLED);
+        return {
+          spudDate: a.DATE_ACCURACY === "Day" ? drilled : null,
+          drillYear: drilled ? Number(drilled.slice(0, 4)) : null,
+          dateAccuracy: a.DATE_ACCURACY ?? null,
+        };
+      })(),
       depthMD: nz(a.LENGTH),
       depthUnit: "m",
       reports: a.RELATED_REPORTS,

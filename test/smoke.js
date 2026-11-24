@@ -2,15 +2,21 @@
 // Run: npm run smoke            (all sources)
 //      npm run smoke -- UT NO   (only sources whose key, country or state matches)
 //
-// Per source, three checks through the same provider code the tools use:
+// Per source, four checks through the same provider code the tools use:
 //   search  - the source's own `probe` filter returns at least one record
 //   id      - get_well's findById finds that record again by its identifier
 //             (US API numbers are re-looked-up with dashes stripped, which proves
 //             the dash-tolerant match against sources that store dashed numbers)
-//   near    - a 2 km radius search centred ~550 m north of that record finds it (off-centre,
-//             so a server that ignores the distance and matches only the exact point fails)
+//   name    - search_wells finds the record again by the name it displays, ranked as an
+//             exact match (proves lease + number searches where a layer stores them apart)
+//   near    - wells_near's search, 2 km around a point ~550 m north of that record, lists a
+//             nearest well no farther than the record itself (off-centre, so a server that
+//             ignores the distance and matches only the exact point fails; and in a dense
+//             field, where the circle holds more wells than one answer carries, the
+//             nearest must still be the nearest)
 import { SOURCES, normalizeRecord } from "../src/sources/index.js";
 import { providerFor } from "../src/providers/index.js";
+import { searchOneSource } from "../src/search.js";
 import { searchGeothermalDatasets } from "../src/osti.js";
 import { searchGem } from "../src/gem.js";
 
@@ -73,12 +79,31 @@ async function runChecks(s, line) {
     }
   }
 
+  // Skipped where a name alone is not a query (requiresOneOf) or is too short to single out a record.
+  if (s.searchFields.well_name && String(sample.wellName ?? "").trim().length >= 3 && !s.requiresOneOf) {
+    try {
+      const [r, ms] = await timed(() => searchOneSource(s, { well_name: sample.wellName }, { limit: 50, offset: 0 }));
+      const hit = (r.wells ?? []).find((w) => String(w.api) === String(sample.api) || w.wellName === sample.wellName);
+      const ok = Boolean(hit) && hit.nameMatch >= 0.9;
+      line(ok, s.key, "name", hit ? `${JSON.stringify(sample.wellName)} -> score ${hit.nameMatch}, ${r.wells.length} candidate(s) ${ms}ms` : `${JSON.stringify(sample.wellName)} not among ${r.wells?.length ?? 0} candidate(s) (${r.note ?? "no note"}) ${ms}ms`);
+    } catch (e) {
+      line(false, s.key, "name", e.message);
+    }
+  }
+
   if (s.noNear) return;
   if (Number.isFinite(sample.latitude) && Number.isFinite(sample.longitude)) {
     const near = { latitude: sample.latitude + 0.005, longitude: sample.longitude, radiusKm: 2 };
     try {
-      const [{ rows }, ms] = await timed(() => provider.search(s, {}, { limit: 10, near }));
-      line(rows.length > 0, s.key, "near", `${rows.length} record(s) within 2 km of a point 550 m from the sample (${ms}ms)`);
+      const [r, ms] = await timed(() => searchOneSource(s, {}, { limit: 10, offset: 0, near }));
+      const nearest = r.wells?.[0];
+      const dense = r.completeWithinKm != null ? `, complete within ${r.completeWithinKm} km` : "";
+      line(
+        Boolean(nearest) && nearest.distanceKm <= 0.6,
+        s.key,
+        "near",
+        nearest ? `${r.wells.length} well(s) within 2 km of a point 550 m from the sample, nearest at ${nearest.distanceKm} km${dense} (${ms}ms)` : `nothing within 2 km of a point 550 m from the sample (${ms}ms)`
+      );
     } catch (e) {
       line(false, s.key, "near", e.message);
     }
